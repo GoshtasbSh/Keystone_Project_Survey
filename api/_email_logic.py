@@ -16,6 +16,7 @@ Email delivery (preference order, first available wins):
 from __future__ import annotations
 
 import base64
+import hmac
 import io
 import json
 import os
@@ -211,9 +212,14 @@ def _is_email(s: str | None) -> bool:
 
 # ── Origin helpers ─────────────────────────────────────────────────────────
 def _origin(handler: BaseHTTPRequestHandler) -> str:
-    host = handler.headers.get("Host") or "keystonesurvey.com"
-    proto = handler.headers.get("X-Forwarded-Proto") or "https"
-    return f"{proto}://{host}"
+    # SEC2: NEVER trust the request Host header when building outbound links
+    # (invite/report emails). A spoofed Host would point recipients at a
+    # phishing domain that captures the one-time invite token. Use a fixed
+    # canonical origin from env, with the production alias as the fallback.
+    site = (os.environ.get("SITE_URL") or "").strip().rstrip("/")
+    if site:
+        return site
+    return "https://keystone-project-survey-blue.vercel.app"
 
 
 # ── action=invite : admin sends member-invite email ────────────────────────
@@ -404,7 +410,8 @@ def _cron_authorized(handler: BaseHTTPRequestHandler) -> bool:
     if not secret:
         return False
     got = (handler.headers.get("Authorization") or "").strip()
-    return got == f"Bearer {secret}"
+    # Constant-time comparison to prevent timing attacks against CRON_SECRET.
+    return hmac.compare_digest(got, f"Bearer {secret}")
 
 
 def _handle_daily_report(self: "handler", body: dict) -> None:

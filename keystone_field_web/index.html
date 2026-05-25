@@ -4,8 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>KeyStone Field</title>
+<link rel="icon" href="data:,">
 <link rel="manifest" href="manifest.json">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <link href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
@@ -850,6 +852,7 @@ button{cursor:pointer;font-family:'Inter',system-ui,sans-serif;border:none;backg
           <div class="online-lbl" id="sb-online">Online</div>
         </div>
         <button class="signout-btn" id="signout-btn">Sign Out</button>
+        <a href="/dashboard" class="admin-link" id="desktop-link" style="display:none">🖥 Open Desktop Dashboard</a>
         <a href="/admin" class="admin-link">⚙ Admin &amp; Data Upload</a>
       </div>
     </div>
@@ -1211,7 +1214,7 @@ const STATUS_LIST = [
   ['Follow Up','#06b6d4'],['Other','#ec4899'],['Unknown','#9ca3af'],
 ];
 
-const MAP_CENTER = [-82.0350, 29.6516];
+const MAP_CENTER = [-82.0116, 29.7820];  // centroid of the Keystone Heights survey data (community_contacts)
 
 const TILES = {
   osm:       'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -1240,17 +1243,32 @@ let totalPts = 0, todayPts = 0;
 let IS_GUEST = false;
 let GUEST = null;  // {session_id, name, expires_at}
 let _guestExpiresAt = null;  // Date — refreshed on heartbeat / save
+// Guest sessions are created in sessionStorage (clears on tab close). We also
+// mirror them to localStorage under 'ks-guest-sid' so a tab close doesn't orphan
+// the offline queue (keyed ks-queue-guest-<sid>): on the next visit we restore
+// the same still-valid session_id and the queue replays. (F9)
 function loadGuestSession() {
   try {
-    const raw = sessionStorage.getItem('keystone_guest_session');
+    let raw = sessionStorage.getItem('keystone_guest_session');
+    // Fall back to the localStorage mirror if the tab was closed/reopened.
+    if (!raw) {
+      const persisted = localStorage.getItem('ks-guest-sid');
+      if (persisted) raw = persisted;
+    }
     if (!raw) return null;
     const g = JSON.parse(raw);
     if (!g || !g.session_id || !g.name) return null;
+    // Drop expired guest sessions so we never reuse a dead session_id.
+    if (g.expires_at && new Date(g.expires_at) < new Date()) { clearGuestSession(); return null; }
+    // Keep both stores in sync for the rest of this tab's lifetime.
+    try { sessionStorage.setItem('keystone_guest_session', raw); } catch {}
+    try { localStorage.setItem('ks-guest-sid', raw); } catch {}
     return g;
   } catch { return null; }
 }
 function clearGuestSession() {
   try { sessionStorage.removeItem('keystone_guest_session'); } catch {}
+  try { localStorage.removeItem('ks-guest-sid'); } catch {}
 }
 // Cached raw rows from field_survey_points — used by CSV export + status breakdown
 // so we don't re-query Supabase for every export click.
@@ -1264,7 +1282,16 @@ const isMobile = () => window.innerWidth < 768;
 
 /* ── BOOT ── */
 document.addEventListener('DOMContentLoaded', async () => {
-  loadQueueFromStorage();
+  // Restore persisted theme (F11) before anything paints.
+  try {
+    const savedTheme = localStorage.getItem('ks-theme');
+    if (savedTheme === 'light' || savedTheme === 'dark') {
+      theme = savedTheme;
+      document.documentElement.setAttribute('data-theme', theme);
+      const tb = document.getElementById('theme-btn');
+      if (tb) tb.textContent = theme === 'dark' ? '☀️' : '🌙';
+    }
+  } catch {}
   await loadSupabaseConfig();
 
   // Guest path: ephemeral session in sessionStorage, no Supabase auth.
@@ -1275,6 +1302,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     _guestExpiresAt = guest.expires_at ? new Date(guest.expires_at) : null;
     const initials = guest.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
     currentUser = { name: guest.name, initials, id: null, isGuest: true };
+    // Identity is now set → load the offline queue under the correct key
+    // (ks-queue-guest-<sid>) so reloads replay queued points. (C3)
+    loadQueueFromStorage();
+    updateQueueBadge();
     updateUserUI();
     showGuestBanner();
     // Still try to instantiate the Supabase JS client only for shared
@@ -1309,6 +1340,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const name = u.user_metadata?.full_name || u.email.split('@')[0];
   const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
   currentUser = { name, initials, id: u.id };
+  // Identity is now set → load the offline queue under the correct key
+  // (ks-queue-<uid>) so reloads replay queued points. (C3)
+  loadQueueFromStorage();
+  updateQueueBadge();
   updateUserUI();
   initMap([]);
   startPresenceHeartbeat();
@@ -2664,6 +2699,8 @@ function switchTheme() {
   theme = theme === 'dark' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', theme);
   document.getElementById('theme-btn').textContent = theme === 'dark' ? '☀️' : '🌙';
+  // Persist so the choice survives reload. (F11)
+  try { localStorage.setItem('ks-theme', theme); } catch {}
 }
 
 /* ── SIDEBAR ── */
@@ -2908,7 +2945,7 @@ async function syncQueue() {
 // all three basemaps so surveyors can survey in airplane mode and still
 // see imagery. The service worker's cache-first rule for tile servers
 // means a successful fetch here = available offline forever.
-const SURVEY_BBOX = { minLat: 29.78, maxLat: 29.84, minLon: -82.04, maxLon: -81.94 };
+const SURVEY_BBOX = { minLat: 29.77, maxLat: 29.80, minLon: -82.03, maxLon: -81.98 };  // matches actual survey-data extent + margin
 const PRECACHE_ZOOMS = [14, 15, 16, 17];
 const TILE_TEMPLATES = {
   satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
@@ -3303,6 +3340,9 @@ async function refreshMyRoleMobile() {
     _myRoleMobile = (data && data.role) || null;
     const btn = document.getElementById('mob-ttog-admin');
     if (btn) btn.style.display = _myRoleMobile === 'admin' ? '' : 'none';
+    // F6: non-guest team members can switch to the desktop dashboard (no stuck-mode).
+    const dl = document.getElementById('desktop-link');
+    if (dl && !IS_GUEST && _myRoleMobile) dl.style.display = '';
   } catch {}
 }
 

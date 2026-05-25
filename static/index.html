@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:,">
 <title>KeyStone Field Survey Dashboard</title>
 <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -241,8 +242,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .upload-zone input{display:none}
 
 /* Loading */
-.loading-overlay{position:fixed;inset:0;background:var(--bg);z-index:2000;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .4s}
-.loading-overlay.hide{opacity:0;pointer-events:none}
+.loading-overlay{position:fixed;inset:0;background:var(--bg);z-index:2000;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .4s,visibility 0s linear .4s}
+.loading-overlay.hide{opacity:0;pointer-events:none;visibility:hidden}
 .spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;margin-bottom:16px}
 @keyframes spin{to{transform:rotate(360deg)}}
 .loading-overlay p{color:var(--text2);font-size:13px}
@@ -763,7 +764,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;hei
         <div class="chat-messages" id="chat-messages">
           <div class="chat-bubble assistant">
             Hello! I'm your AI housing vulnerability analyst for Keystone Heights.<br><br>
-            Upload the Qualtrics Survey CSV via <strong>Import Data</strong> to unlock full analysis.<br><br>
+            <span id="chat-greeting-hint">Upload the Qualtrics Survey CSV via <strong>Import Data</strong> to unlock full analysis.<br><br></span>
             I can then answer questions like:<br>
             • "Which street has the worst air quality?"<br>
             • "Show respiratory illness cases on the map"<br>
@@ -1175,11 +1176,11 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;hei
     const sb = window.supabase.createClient(supabase_url, supabase_anon_key);
     const { data: { session } } = await sb.auth.getSession();
     if (!session) {
-      window.location.replace('/keystone_field_web/login.html');
+      window.location.replace('/login');
     }
   } catch (e) {
     // If auth check fails outright, still send to login rather than silently unauth
-    window.location.replace('/keystone_field_web/login.html');
+    window.location.replace('/login');
   }
 })();
 </script>

@@ -4,7 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <title>KeyStone Field — Sign In</title>
+<link rel="icon" href="data:,">
 <link rel="manifest" href="manifest.json">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -455,12 +457,16 @@ async function doGuest(e) {
     }
     // Persist the guest session for the field-app. sessionStorage clears on
     // tab close — appropriate for "one device, one day" surveyor sessions.
-    sessionStorage.setItem('keystone_guest_session', JSON.stringify({
+    // Also mirror to localStorage ('ks-guest-sid') so a tab close doesn't
+    // orphan the offline write queue keyed by this session_id. (F9)
+    const guestBlob = JSON.stringify({
       session_id: data.session_id,
       name:       data.name,
       expires_at: data.expires_at,
       claimed_at: Date.now(),
-    }));
+    });
+    sessionStorage.setItem('keystone_guest_session', guestBlob);
+    try { localStorage.setItem('ks-guest-sid', guestBlob); } catch {}
     // Field surveyors always go to the mobile field UI, regardless of viewport.
     window.location.replace('/field/');
   } catch (err) {

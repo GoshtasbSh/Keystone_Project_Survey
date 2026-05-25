@@ -243,11 +243,17 @@ async function loadData() {
     if (iaqData && iaqData.features && iaqData.features.length) {
       updateIAQOnMap();
       buildSurveyResultsTab(iaqAnalysis);
+      // IAQ analysis is already loaded → drop the stale "upload to unlock"
+      // hint from the AI greeting; the analyst is ready to use. (UI-L4)
+      const greetHint = document.getElementById('chat-greeting-hint');
+      if (greetHint) greetHint.innerHTML = 'Survey data is loaded and ready &mdash; ask me anything.<br><br>';
     }
 
     fitBounds();
     loadAnalysisMeta();   // show "Analyzed: [date]" badge in header
-    document.getElementById('loading').classList.add('hide');
+    const loadingEl = document.getElementById('loading');
+    loadingEl.classList.add('hide');
+    loadingEl.setAttribute('aria-hidden', 'true');  // drop from a11y tree (UI-L5)
   } catch (e) {
     console.error('Data load error:', e);
     document.querySelector('#loading p').textContent = 'Error loading data. Is the server running?';
@@ -428,7 +434,11 @@ function addLayers() {
       visibility: 'none',
       'text-field': '{point_count_abbreviated}',
       'text-size': ['interpolate', ['linear'], ['get', 'point_count'], 2, 11, 10, 14, 40, 17],
-      'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+      // UI-L10 fix: the glyph endpoint (demotiles) does not serve the
+      // "Open Sans Bold,Arial Unicode MS Bold" stack (404 → cluster counts
+      // never rendered). Use the Regular stack that the Labels layer already
+      // loads successfully from the same endpoint.
+      'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
     },
     paint: { 'text-color': '#ffffff' },
   });
@@ -2712,6 +2722,18 @@ function setupUI() {
   });
   document.getElementById('btn-daily-refresh').addEventListener('click', runDailyRefresh);
 
+  // Escape closes any open modal (history / team / import-update). Mirrors the
+  // backdrop-click + close-button logic for each. (UI-L3)
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const importM = document.getElementById('import-modal');
+    if (importM?.classList.contains('show')) importM.classList.remove('show');
+    const historyM = document.getElementById('history-modal');
+    if (historyM?.classList.contains('show')) historyM.classList.remove('show');
+    const teamM = document.getElementById('team-modal');
+    if (teamM?.classList.contains('show')) { teamM.classList.remove('show'); teamM.style.display = 'none'; }
+  });
+
   // Upload zones
   setupUploadZones();
   setupLayerToggles();
@@ -2746,7 +2768,7 @@ async function openHistoryModal() {
   const body = document.getElementById('history-modal-body');
   body.innerHTML = '<div class="version-empty">Loading...</div>';
   try {
-    const res = await fetch('/api/versions');
+    const res = await _authFetch('/api/versions');
     const data = await res.json();
     const contactVersions = data.community_contact || [];
     const iaqVersions     = data.iaq_survey || [];
@@ -5707,17 +5729,6 @@ async function getTodayInviteCode() {
   }
 }
 
-async function dashboardPromote(uid) {
-  if (!confirm('Promote this user to admin? They gain full upload + delete + team-management privileges.')) return;
-  try {
-    const { data, error } = await sbClient.rpc('promote_member', { p_target: uid });
-    if (error) throw error;
-    if (!data?.ok) throw new Error(data?.error || 'Promote failed');
-    _teamMsg('User promoted to admin', 'ok');
-    await loadTeamRoster();
-  } catch (e) { _teamMsg(e.message || 'Promote failed', 'err'); }
-}
-
 async function dashboardDemote(uid) {
   if (!confirm('Demote this admin to member?')) return;
   try {
@@ -5775,7 +5786,6 @@ async function dashboardRevokeGuest(sid) {
 }
 
 // Expose handlers used in inline onclick.
-window.dashboardPromote     = dashboardPromote;
 window.dashboardDemote      = dashboardDemote;
 window.dashboardRevokeGuest = dashboardRevokeGuest;
 

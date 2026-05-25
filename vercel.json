@@ -53,7 +53,10 @@
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "X-Frame-Options",        "value": "DENY" },
         { "key": "Referrer-Policy",        "value": "strict-origin-when-cross-origin" },
-        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://*.basemaps.cartocdn.com https://*.openstreetmap.org https://*.tile.openstreetmap.org; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.groq.com https://nominatim.openstreetmap.org; worker-src blob:; child-src blob:" }
+        { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" },
+        { "key": "Permissions-Policy",     "value": "geolocation=(self), camera=(), microphone=()" },
+        { "key": "X-XSS-Protection",       "value": "0" },
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://*.basemaps.cartocdn.com https://basemaps.cartocdn.com https://*.openstreetmap.org https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.arcgisonline.com https://tile.opentopomap.org https://*.tile.opentopomap.org https://demotiles.maplibre.org; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.groq.com https://nominatim.openstreetmap.org https://overpass-api.de https://demotiles.maplibre.org https://*.basemaps.cartocdn.com https://basemaps.cartocdn.com https://*.openstreetmap.org https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.arcgisonline.com https://tile.opentopomap.org https://*.tile.opentopomap.org; worker-src 'self' blob:; child-src blob:" }
       ]
     },
     {
@@ -61,7 +64,11 @@
       "headers": [
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "X-Frame-Options",        "value": "DENY" },
-        { "key": "Referrer-Policy",        "value": "strict-origin-when-cross-origin" }
+        { "key": "Referrer-Policy",        "value": "strict-origin-when-cross-origin" },
+        { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" },
+        { "key": "Permissions-Policy",     "value": "geolocation=(self), camera=(), microphone=()" },
+        { "key": "X-XSS-Protection",       "value": "0" },
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://*.basemaps.cartocdn.com https://basemaps.cartocdn.com https://*.openstreetmap.org https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.arcgisonline.com https://tile.opentopomap.org https://*.tile.opentopomap.org https://demotiles.maplibre.org; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.groq.com https://nominatim.openstreetmap.org https://overpass-api.de https://demotiles.maplibre.org https://*.basemaps.cartocdn.com https://basemaps.cartocdn.com https://*.openstreetmap.org https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.arcgisonline.com https://tile.opentopomap.org https://*.tile.opentopomap.org; worker-src 'self' blob:; child-src blob:; manifest-src 'self'" }
       ]
     }
   ]

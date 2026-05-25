@@ -64,12 +64,22 @@ def _get_client_ip(self) -> str:
     return (self.headers.get("X-Real-IP") or "").strip()
 
 
+_warned_no_salt = False
+
 def _hash_ip(ip: str) -> str:
+    global _warned_no_salt
     if not ip:
         return ""
     salt = os.environ.get("KEYSTONE_IP_HASH_SALT") or ""
     if not salt:
-        # No salt configured — omit hash rather than cascade to other secrets
+        # S2: without a salt the per-IP guest-claim rate limit silently
+        # no-ops. We still omit the hash (never cascade to another secret),
+        # but loudly warn so the misconfiguration is caught in logs.
+        if not _warned_no_salt:
+            print("[guest] WARNING: KEYSTONE_IP_HASH_SALT is unset — "
+                  "per-IP guest-claim rate limiting is DISABLED. Set it in "
+                  "the Vercel project env to enable abuse protection.", flush=True)
+            _warned_no_salt = True
         return ""
     return hashlib.sha256((salt + "|" + ip).encode("utf-8")).hexdigest()[:32]
 
@@ -498,6 +508,16 @@ class handler(BaseHTTPRequestHandler):
             print(f"[guest/points-all] read FAIL {type(e).__name__}: {e}")
             json_response(self, 500, {"ok": False, "error": "Could not load points."})
             return
+        # SEC1: do not leak cross-guest / member identifiers to guests.
+        # The client only needs guest_session_id to flag the caller's OWN
+        # points (edit/delete); other guests' ids and members' auth UIDs
+        # (collector_id) must never be exposed. Operational notes + display
+        # name are retained (invited team helpers).
+        own_sid = sess.get("id")
+        for r in rows:
+            if r.get("guest_session_id") != own_sid:
+                r["guest_session_id"] = None
+            r["collector_id"] = None
         _touch_session(sb, sess["id"])
         json_response(self, 200, {"ok": True, "points": rows})
 

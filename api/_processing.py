@@ -286,16 +286,18 @@ _COLNAME_RECODE_LABELS: dict = {
     'Hospital Respiratory':{'1': 'Yes', '2': 'No', '3': 'No', '4': 'No'},
     # Ownership: 1=Owner, 2=Renter, 3=Other/Co-own
     'Ownership':           {'1': 'Owner', '2': 'Renter', '3': 'Other'},
-    # Cooling system age (QID102): 1=<10 yr, 2=10-15 yr, 4=>15 yr
-    # (Answer key 3 was never used; code 3 in data = 10-15 yr variant)
-    'Cooling System _1':   {'1': 'Less than 10 Years', '2': '10 to 15 Years',
-                            '3': '10 to 15 Years',     '4': 'More than 15 Years'},
-    'Cooling System _2':   {'1': 'Less than 10 Years', '2': '10 to 15 Years',
-                            '3': '10 to 15 Years',     '4': 'More than 15 Years'},
-    'Cooling System _3':   {'1': 'Less than 10 Years', '2': '10 to 15 Years',
-                            '3': '10 to 15 Years',     '4': 'More than 15 Years'},
-    'Cooling System _4':   {'1': 'Less than 10 Years', '2': '10 to 15 Years',
-                            '3': '10 to 15 Years',     '4': 'More than 15 Years'},
+    # Cooling system TYPE (QID205, confirmed in the QSF — this question has NO
+    # age dimension). It is a check-all multi-select; each "Cooling System _N"
+    # column corresponds to choice N and holds that choice's recode when ticked:
+    #   1 = Central Air-conditioning, 2 = Window/Wall/Portable AC,
+    #   3 = Ceiling Fans, 4 = No Air-conditioning.
+    # (Previously these were mis-mapped to fabricated "age" labels — a misread
+    # of the questionnaire that corrupted both the cooling charts and the IAQ
+    # composite. Corrected to TYPE; scoring updated in _compute_iaq_score.)
+    'Cooling System _1':   {'1': 'Central Air-conditioning'},
+    'Cooling System _2':   {'2': 'Window/Wall AC', '1': 'Window/Wall AC'},
+    'Cooling System _3':   {'3': 'Ceiling Fans',   '1': 'Ceiling Fans'},
+    'Cooling System _4':   {'4': 'No Air-conditioning', '1': 'No Air-conditioning'},
 }
 
 
@@ -763,13 +765,20 @@ def _compute_iaq_score(row) -> int:
         val = str(_nr.get(col, '') or '').lower().strip()
         if val and val not in ('none', 'nan', ''):
             score += 7.5
-    for col in ['Cooling System _1', 'Cooling System _2',
-                'Cooling System _3', 'Cooling System _4']:
-        val = str(_nr.get(col, '') or '').lower()
-        if 'more than 15' in val:
-            score += 4
-        elif "don't know" in val or 'not applicable' in val:
-            score += 2
+    # Cooling TYPE risk (QID205 — type, not age). Established heat/IAQ
+    # vulnerability ordering: No A/C is highest risk; window-units / fans only
+    # (no central) is moderate; central A/C is baseline. Magnitudes (+4 / +2)
+    # are unchanged from the prior model — only WHAT they score is corrected.
+    def _cool_sel(c):
+        v = str(_nr.get(c, '') or '').strip().lower()
+        return v not in ('', 'nan', 'none')
+    has_central = _cool_sel('Cooling System _1')
+    has_no_ac   = _cool_sel('Cooling System _4')
+    has_partial = _cool_sel('Cooling System _2') or _cool_sel('Cooling System _3')
+    if has_no_ac:
+        score += 4
+    elif has_partial and not has_central:
+        score += 2
     if any(kw in str(_nr.get('Cooking', '') or '').lower() for kw in ('gas', 'propane')):
         score += 10
     return round(min(score, 100))
@@ -1349,6 +1358,13 @@ def _apply_iaq_to_field_features(field_features: list, iaq_features: list,
     """
     if not iaq_features:
         return 0
+    # IMPORTANT: we mutate each matched IAQ feature's properties.iaq_matched
+    # in place below. The caller (daily-refresh.py) re-reads that flag from
+    # THIS SAME list to decide whether to persist the iaq_survey blob, so we
+    # must NOT deep-copy here — doing so would discard the flips and the
+    # 'matched' (white-rim) state would never persist. Each serverless
+    # invocation already deserializes its own list from the DB blob, so
+    # there is no shared/cross-request object to race on.
     upgraded = 0
     for ff in field_features:
         # NB: previously this loop skipped points whose status was already
