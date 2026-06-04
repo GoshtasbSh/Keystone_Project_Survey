@@ -91,6 +91,19 @@ def _name_safe(name: str) -> str:
     return " ".join(s.split())[:80]
 
 
+def _filter_presence_active(presence, active_ids):
+    """Return only presence rows whose user_id is in the active set.
+
+    `active_ids` is the list of member UUIDs returned by the SQL RPC
+    `active_member_ids()` (last_sign_in within 24h). Rows without a
+    user_id, or for inactive/expired people, are dropped. Pure +
+    side-effect-free so it is unit-testable without Supabase.
+    """
+    active = set(active_ids or [])
+    return [p for p in (presence or [])
+            if p.get("user_id") in active]
+
+
 def _now_local() -> datetime:
     return datetime.now(LOCAL_TZ)
 
@@ -539,6 +552,22 @@ class handler(BaseHTTPRequestHandler):
             print(f"[guest/team-list] read FAIL {type(e).__name__}: {e}")
             json_response(self, 500, {"ok": False, "error": "Could not load team activity."})
             return
+
+        # Visibility: guests are non-admin viewers, so the presence roster
+        # they see must be ACTIVE members/admins only (last_sign_in < 24h).
+        # The 24h rule lives in SQL (active_member_ids); we never recompute
+        # it here. Points are returned in full so the MAP keeps every pin
+        # attributed to its original author (authorship is preserved).
+        try:
+            ami = sb.rpc("active_member_ids").execute()
+            active_ids = [r["id"] for r in (ami.data or [])]
+            presence = _filter_presence_active(presence, active_ids)
+        except Exception as e:
+            print(f"[guest/team-list] active filter FAIL {type(e).__name__}: {e}")
+            # Fail safe: if the active set can't be resolved, show NO
+            # presence rather than leaking everyone (privacy-preserving).
+            presence = []
+
         _touch_session(sb, sess["id"])
         json_response(self, 200, {
             "ok":       True,
