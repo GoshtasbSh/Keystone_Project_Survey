@@ -44,6 +44,8 @@ let chatUnreadCount   = 0;
 let activeTeamSubtab  = 'activity'; // 'activity' | 'chats'
 let pendingAttachment = null;       // { file, type } | null
 let fieldPresence = {}; // user_id → { display_name, last_active_at }
+let activeMemberIds  = new Set();  // member/admin UUIDs active (<24h), from active_member_ids()
+let activeGuestNames = new Set();  // lowercased names of unexpired guests, from active_guests()
 let activeFilters = new Set();
 let charts = {};
 let iaqData = null, iaqAnalysis = null, chatHistory = [];
@@ -835,6 +837,9 @@ async function initFieldPoints() {
     }
   } catch (e) { /* table may not exist yet — ignore */ }
 
+  // Load the active-visibility sets alongside presence.
+  await loadActiveSets();
+
   // Load today's chat messages
   await loadTodayMessages();
 
@@ -850,7 +855,9 @@ async function initFieldPoints() {
       ({ new: p, old: o }) => {
         const r = p || o;
         if (r && r.user_id) fieldPresence[r.user_id] = r;
-        if (typeof renderPerUserPanel === 'function') renderPerUserPanel();
+        loadActiveSets().finally(() => {
+          if (typeof renderPerUserPanel === 'function') renderPerUserPanel();
+        });
       })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'team_chat_messages' },
       ({ new: msg }) => { if (msg?.id) onChatMessage(msg); })
@@ -894,6 +901,26 @@ function presenceLabel(iso) {
   return { label: `${Math.round(diff/1440)}d ago`, cls: 'offline' };
 }
 
+// Pull the active sets that gate who appears in the team-activity panel.
+// Active members/admins come from active_member_ids() (last_sign_in < 24h);
+// active guests come from active_guests() (unexpired, unrevoked). The map
+// itself is untouched — gone people keep authoring their pins.
+async function loadActiveSets() {
+  if (!sbClient) return;
+  try {
+    const [mids, guests] = await Promise.all([
+      sbClient.rpc('active_member_ids'),
+      sbClient.rpc('active_guests'),
+    ]);
+    activeMemberIds  = new Set((mids.data   || []).map(r => r.id));
+    activeGuestNames = new Set((guests.data || []).map(r => (r.name || '').toLowerCase()));
+  } catch (e) {
+    console.warn('loadActiveSets failed:', e);
+    // Fail-safe: leave the existing sets as-is rather than blanking the panel.
+  }
+}
+window.loadActiveSets = loadActiveSets;
+
 function renderPerUserPanel() {
   const rowsEl = document.getElementById('team-rows');
   const subEl  = document.getElementById('team-sub');
@@ -936,7 +963,15 @@ function renderPerUserPanel() {
     if (a.is_mine !== b.is_mine) return a.is_mine ? -1 : 1;
     if (b.today !== a.today) return b.today - a.today;
     return (new Date(b.last_active_at || 0)) - (new Date(a.last_active_at || 0));
-  });
+  }).filter(m =>
+    // Keep myself always; otherwise show only people who are around now:
+    // active members/admins (by UUID) or active guests (by name). Gone
+    // guests and inactive members drop off the panel — but their pins
+    // remain on the map, attributed to them (authorship preserved).
+    m.is_mine
+    || activeMemberIds.has(m.id)
+    || activeGuestNames.has((m.name || '').toLowerCase())
+  );
 
   if (!rows.length) {
     if (subEl) subEl.textContent = 'Waiting for field data…';
@@ -5636,28 +5671,31 @@ async function loadTeamRoster() {
   const list = document.getElementById('team-list');
   if (!sbClient) return;
   try {
-    // Admins see ALL signed-up users (whether or not they've claimed
-    // today's invite code) via list_all_signups, so they can promote
-    // anyone with one click. Members fall back to the team-only roster.
-    let members = [];
-    if (_myRole === 'admin') {
-      const { data, error } = await sbClient.rpc('list_all_signups');
-      if (error) throw error;
-      members = data || [];
-    } else {
-      const { data, error } = await sbClient.rpc('list_team');
-      if (error) throw error;
-      members = data || [];
-    }
+    // list_roster() is role-aware: non-admins receive ONLY active
+    // members/admins (last_sign_in < 24h); admins receive everyone, with
+    // an `active` flag and last_sign_in_at so we can show "last seen" for
+    // inactive teammates. Guests/members never see inactive people.
+    const { data, error } = await sbClient.rpc('list_roster');
+    if (error) throw error;
+    const members = data || [];
     if (!members.length) {
-      list.innerHTML = '<div style="font-size:12px;color:var(--muted)">No users yet.</div>';
+      list.innerHTML = '<div style="font-size:12px;color:var(--muted)">No active teammates right now.</div>';
       return;
     }
-    const myUid = currentUserId;
+    const myUid   = currentUserId;
+    const isAdminViewer = _myRole === 'admin';
 
-    const rowsHtml = members.map(m => {
-      const isMe    = m.id === myUid;
-      const isAdmin = m.role === 'admin';
+    const lastSeen = (ts) => {
+      if (!ts) return 'never signed in';
+      const d = Math.floor((Date.now() - new Date(ts).getTime()) / 60000);
+      if (d < 60)   return `last seen ${d}m ago`;
+      if (d < 1440) return `last seen ${Math.round(d/60)}h ago`;
+      return `last seen ${Math.round(d/1440)}d ago`;
+    };
+
+    const renderRow = (m) => {
+      const isMe     = m.id === myUid;
+      const isAdmin  = m.role === 'admin';
       const isMember = m.role === 'member';
       let tag;
       if (isAdmin) {
@@ -5665,23 +5703,34 @@ async function loadTeamRoster() {
       } else if (isMember) {
         tag = '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:5px;font-family:\'IBM Plex Mono\',monospace;background:rgba(139,148,158,.15);color:var(--muted);border:1px solid var(--border)">MEMBER</span>';
       } else {
-        tag = '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:5px;font-family:\'IBM Plex Mono\',monospace;background:rgba(245,158,11,.12);color:#f59e0b;border:1px solid rgba(245,158,11,.28)" title="Signed up but has not yet claimed today\'s invite code">NOT JOINED</span>';
+        tag = '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:5px;font-family:\'IBM Plex Mono\',monospace;background:rgba(245,158,11,.12);color:#f59e0b;border:1px solid rgba(245,158,11,.28)">NOT JOINED</span>';
       }
-      // Admin actions: promote anyone who isn't already admin (members
-      // and not-joined users alike). Demote only existing admins.
-      const promote = (_myRole === 'admin' && !isAdmin)
+      const promote = (isAdminViewer && !isAdmin)
         ? `<button class="btn btn-sm" onclick="dashboardPromoteByEmail('${_esc(m.email)}')" style="font-size:11px;padding:4px 10px">Make admin</button>` : '';
-      const demote  = (_myRole === 'admin' && isAdmin && !isMe)
+      const demote  = (isAdminViewer && isAdmin && !isMe)
         ? `<button class="btn btn-sm" onclick="dashboardDemote('${_esc(m.id)}')" style="font-size:11px;padding:4px 10px;background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.25)">Demote</button>` : '';
+      // Admins additionally see a muted "last seen" line for INACTIVE rows.
+      const seen = (isAdminViewer && !m.active)
+        ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">${_esc(lastSeen(m.last_sign_in_at))}</div>` : '';
       return `
-        <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:9px;background:var(--panel-2,#0d1117)">
-          <div style="flex:1;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_esc(m.email)}${isMe ? ' <span style="color:var(--muted);font-weight:400">(you)</span>' : ''}</div>
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:9px;background:var(--panel-2,#0d1117);opacity:${m.active ? 1 : 0.6}">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_esc(m.email)}${isMe ? ' <span style="color:var(--muted);font-weight:400">(you)</span>' : ''}</div>
+            ${seen}
+          </div>
           ${tag}
           ${promote}${demote}
         </div>`;
-    }).join('');
+    };
 
-    list.innerHTML = rowsHtml;
+    const active   = members.filter(m => m.active);
+    const inactive = members.filter(m => !m.active);   // admins only — non-admins never receive these rows
+    let html = active.map(renderRow).join('');
+    if (isAdminViewer && inactive.length) {
+      html += `<div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 2px 8px">Inactive (last 24h+)</div>`;
+      html += inactive.map(renderRow).join('');
+    }
+    list.innerHTML = html;
   } catch (e) {
     list.innerHTML = `<div style="font-size:12px;color:#ef4444">Failed to load: ${_esc(e.message || e)}</div>`;
   }
