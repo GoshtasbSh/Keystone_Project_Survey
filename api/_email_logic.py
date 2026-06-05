@@ -249,7 +249,16 @@ def _handle_invite(self: "handler", body: dict) -> None:
     token = rec.get("token") or ""
     invite_id = rec.get("id") or ""
     expires_at = rec.get("expires_at") or ""
-    signup_url = f"{_origin(self)}/login?invite={token}&email={urllib.parse.quote(target_email)}"
+    # NOTE: link to the CANONICAL login path, not the pretty "/login" alias.
+    # With cleanUrls=true, "/login?..." 308-redirects to
+    # "/keystone_field_web/login" and Vercel drops the query string in that
+    # hop, so the invite token never reaches the page and the Create Account
+    # tab stays hidden. The canonical path is served with no redirect, so the
+    # ?invite=&email= params survive intact.
+    signup_url = (
+        f"{_origin(self)}/keystone_field_web/login"
+        f"?invite={token}&email={urllib.parse.quote(target_email)}"
+    )
     subject = "You're invited to KeyStone Field — DTSC Lab, University of Florida"
     text = (
         f"Hello,\n\n"

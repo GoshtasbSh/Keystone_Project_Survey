@@ -5607,9 +5607,11 @@ function initTeamModal() {
     document.getElementById('team-code-row').style.display          = isAdmin ? 'flex' : 'none';
     document.getElementById('guest-sessions-section').style.display = isAdmin ? '' : 'none';
     document.getElementById('team-modal-sub').textContent = isAdmin
-      ? "Generate today's invite code for new surveyors. Promote teammates to admin."
+      ? 'Invite new members by email, generate today\'s guest code, and promote teammates to admin.'
       : 'Roster of your team. Ask an admin if you need an invite code or role change.';
-    // Show the "make admin by email" form only for admins.
+    // Show the admin-only "invite by email" and "make admin by email" forms.
+    const inviteRow = document.getElementById('team-invite-row');
+    if (inviteRow) inviteRow.style.display = isAdmin ? 'flex' : 'none';
     const promoteRow = document.getElementById('team-promote-row');
     if (promoteRow) promoteRow.style.display = isAdmin ? 'flex' : 'none';
     overlay.classList.add('show');
@@ -5632,10 +5634,56 @@ function initTeamModal() {
 
   document.getElementById('team-btn-code').addEventListener('click', getTodayInviteCode);
   document.getElementById('team-btn-refresh-guests').addEventListener('click', loadGuestSessionsForToday);
+  document.getElementById('team-btn-invite-email').addEventListener('click', inviteByEmailFromInput);
+  document.getElementById('team-invite-email').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); inviteByEmailFromInput(); }
+  });
   document.getElementById('team-btn-promote-email').addEventListener('click', promoteByEmailFromInput);
   document.getElementById('team-promote-email').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); promoteByEmailFromInput(); }
   });
+}
+
+// Invite a NEW person to join the team. Unlike promote-by-email (which
+// requires the target to already have an account), this sends a secure
+// signup link via the backend invite endpoint. That endpoint creates a
+// member_invites token (admin-gated, SECURITY DEFINER) and emails the
+// recipient a signup link with an invite token + email. Clicking it unlocks
+// the "Create Account" tab on the login page; on signup the recipient is
+// auto-promoted to a team member.
+async function inviteByEmailFromInput() {
+  const input = document.getElementById('team-invite-email');
+  const btn   = document.getElementById('team-btn-invite-email');
+  const email = (input.value || '').trim().toLowerCase();
+  if (!email || !email.includes('@')) {
+    _teamMsg('Enter a valid email to invite.', 'err');
+    return;
+  }
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const res = await _authFetch('/api/daily-refresh?action=invite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    let data = {};
+    try { data = await res.json(); } catch { /* tolerate non-JSON error bodies */ }
+    if (!res.ok || !data.ok) {
+      throw new Error(data.detail || data.error || `Invite failed (${res.status}).`);
+    }
+    let exp = 'in 14 days';
+    if (data.expires_at) {
+      const d = new Date(data.expires_at);
+      if (!isNaN(d)) exp = 'on ' + d.toLocaleDateString();
+    }
+    _teamMsg(`Invite emailed to ${email}. The signup link expires ${exp}.`, 'ok');
+    input.value = '';
+    await loadTeamRoster();
+  } catch (e) {
+    _teamMsg(e.message || 'Invite failed.', 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Send invite';
+  }
 }
 
 async function promoteByEmailFromInput() {
