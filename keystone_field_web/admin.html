@@ -108,6 +108,8 @@ button{cursor:pointer;font-family:'Inter',sans-serif;border:none;background:none
 .upload-ico{font-size:28px;margin-bottom:8px;}
 .upload-txt{font-size:13px;font-weight:600;color:var(--text);}
 .upload-sub{font-size:11px;color:var(--muted);margin-top:4px;line-height:1.5;}
+.force-row{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted);margin-top:10px;cursor:pointer;user-select:none;}
+.force-row input{margin:0;cursor:pointer;}
 
 /* Buttons */
 .btn{
@@ -288,6 +290,10 @@ button{cursor:pointer;font-family:'Inter',sans-serif;border:none;background:none
         <div class="upload-txt">Drop CSV here or click to browse</div>
         <div class="upload-sub">Accepts Qualtrics-format CSV export · First 2 metadata rows are skipped automatically</div>
       </div>
+      <label class="force-row" for="force-iaq">
+        <input type="checkbox" id="force-iaq">
+        Force replace (allows deleting stored responses — use only when certain)
+      </label>
       <div class="upload-progress" id="prog-iaq">
         <div class="prog-bar-wrap"><div class="prog-bar-fill" id="progbar-iaq" style="width:0%"></div></div>
         <div class="prog-msg" id="progmsg-iaq">Reading file…</div>
@@ -1013,7 +1019,11 @@ async function handleUploadWithFile(type, file) {
     const { data: { session } } = await sb.auth.getSession();
     if (!session) { window.location.replace('/login'); return; }
 
-    const endpoint = type === 'community' ? '/api/upload?type=survey' : '/api/upload?type=iaq';
+    let endpoint = type === 'community' ? '/api/upload?type=survey' : '/api/upload?type=iaq';
+    if (type === 'iaq') {
+      const forceEl = document.getElementById('force-iaq');
+      if (forceEl && forceEl.checked) endpoint += '&force=1';
+    }
     const fd = new FormData();
     fd.append('file', file, file.name);
 
@@ -1026,6 +1036,10 @@ async function handleUploadWithFile(type, file) {
     });
 
     const data = await res.json().catch(() => ({}));
+    if (res.status === 409) {
+      showBlockedUpload(type, data);
+      return;
+    }
     if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`);
 
     setProgress(type, 100, 'Done!');
@@ -1067,6 +1081,21 @@ function clearResult(type) {
   const el = document.getElementById(`result-${type}`);
   el.className = 'result';
   el.textContent = '';
+}
+
+// Renders the safety-guard 409 (evaluate_iaq_upload_safety) as a red banner
+// instead of the generic one-line error, since it's the only response that
+// carries structured detail (dropped_response_ids) worth showing in full.
+function showBlockedUpload(type, data) {
+  const el = document.getElementById(`result-${type}`);
+  const lost = (data.dropped_response_ids || []).length;
+  el.innerHTML =
+    '<strong>Upload blocked — no data was changed.</strong>' +
+    '<p style="margin-top:6px;">' + _esc(data.detail || 'Refused.') + '</p>' +
+    (lost ? '<p style="margin-top:6px;"><strong>' + lost + '</strong> stored response(s) would have been deleted.</p>' : '') +
+    '<p style="margin-top:6px;color:var(--muted);">If you are certain this file is correct, tick ' +
+    '&ldquo;Force replace&rdquo; and upload again.</p>';
+  el.className = 'result err show';
 }
 
 /* ═══════════════════════════════════════════════════════════════
