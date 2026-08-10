@@ -37,6 +37,23 @@ SQUARE_INDEX = {
         "bbox": [-82.0193, 29.7835, -82.0189, 29.7841],
         "ring": [[-82.0193, 29.7835], [-82.0189, 29.7835],
                  [-82.0189, 29.7841], [-82.0193, 29.7841], [-82.0193, 29.7835]],
+        "holes": [],
+    }],
+}
+
+# Same outer boundary, with an interior ring (hole) around the point
+# SQUARE_INDEX's own tests use as "inside" — proves the endpoint honours
+# holes end-to-end, not just the shared lookup_parcel() helper in isolation.
+SQUARE_WITH_HOLE_INDEX = {
+    "version": 1,
+    "parcels": [{
+        "parcel_id": "P3",
+        "address": "6411 BELOIT Ave",
+        "bbox": [-82.0193, 29.7835, -82.0189, 29.7841],
+        "ring": [[-82.0193, 29.7835], [-82.0189, 29.7835],
+                 [-82.0189, 29.7841], [-82.0193, 29.7841], [-82.0193, 29.7835]],
+        "holes": [[[-82.01915, 29.7837], [-82.01905, 29.7837],
+                   [-82.01905, 29.7839], [-82.01915, 29.7839], [-82.01915, 29.7837]]],
     }],
 }
 
@@ -79,3 +96,18 @@ class UnmatchedIaqTests(unittest.TestCase):
         props = out["features"][0]["properties"]
         self.assertTrue(props["orphan"])
         self.assertEqual(props["parcel_id"], "P1")
+
+    def test_point_inside_a_hole_falls_back_not_the_hole_parcels_address(self):
+        """2026-08-10 finding: a confidently wrong address is worse than the
+        fallback — a point sitting inside an interior ring must never be
+        handed that parcel's street address."""
+        out = unmatched_iaq.build_unmatched_iaq(
+            [iaq("R_1", -82.0191, 29.7838)], [], SQUARE_WITH_HOLE_INDEX)
+        self.assertEqual(out["features"][0]["properties"]["parcel_address"],
+                         "Address not on file")
+
+    def test_point_in_the_solid_part_of_a_parcel_with_a_hole_still_resolves(self):
+        out = unmatched_iaq.build_unmatched_iaq(
+            [iaq("R_1", -82.01925, 29.7836)], [], SQUARE_WITH_HOLE_INDEX)
+        self.assertEqual(out["features"][0]["properties"]["parcel_address"],
+                         "6411 BELOIT Ave")

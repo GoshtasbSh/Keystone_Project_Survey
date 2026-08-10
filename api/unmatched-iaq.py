@@ -12,36 +12,20 @@ published yet (data_type='parcel_address_index' row missing, or an empty
 payload): orphan features are still returned, each carrying the fallback
 `parcel_address` below. This endpoint must never 500 and must never raise
 because that blob is absent.
+
+The point-in-polygon ray-cast used to resolve `parcel_address` lives in
+api/survey_logic.py (`lookup_parcel`) — the single source of truth shared
+with scripts/build_parcel_address_index.py, so a geometry fix (e.g.
+honouring interior-ring holes) only has to be made once.
 """
 from http.server import BaseHTTPRequestHandler
 
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).parent))
 from _lib import load_cached, json_response, empty_geojson, strip_survey_answers
-from survey_logic import orphan_iaq_features
+from survey_logic import orphan_iaq_features, lookup_parcel
 
 FALLBACK_ADDRESS = 'Address not on file'
-
-
-def _lookup(index: dict, lon: float, lat: float):
-    for p in (index or {}).get('parcels') or []:
-        x0, y0, x1, y1 = p['bbox']
-        if not (x0 <= lon <= x1 and y0 <= lat <= y1):
-            continue
-        ring = p['ring']
-        inside = False
-        n = len(ring)
-        j = n - 1
-        for i in range(n):
-            xi, yi = ring[i]
-            xj, yj = ring[j]
-            if (yi > lat) != (yj > lat):
-                if lon < (xj - xi) * (lat - yi) / ((yj - yi) or 1e-15) + xi:
-                    inside = not inside
-            j = i
-        if inside:
-            return p['address'], p.get('parcel_id')
-    return None, None
 
 
 def build_unmatched_iaq(iaq_features: list, contact_features: list, index: dict) -> dict:
@@ -59,7 +43,7 @@ def build_unmatched_iaq(iaq_features: list, contact_features: list, index: dict)
         lon, lat = coords[0], coords[1]
         addr, pid = (None, None)
         if lon is not None and lat is not None:
-            addr, pid = _lookup(index, float(lon), float(lat))
+            addr, pid = lookup_parcel(index, float(lon), float(lat))
         props = dict(f.get('properties') or {})
         props['parcel_address'] = addr or FALLBACK_ADDRESS
         props['parcel_id'] = pid

@@ -9,6 +9,12 @@ this Qualtrics response sitting on?"
 SAFETY: writes ONLY to data_type='parcel_address_index'. It never reads,
 updates or deletes community_contact, iaq_survey or analysis.
 
+The point-in-polygon ray-cast and index-entry shape live in
+api/survey_logic.py (build_parcel_address_entries / lookup_parcel) — the
+single source of truth shared with api/unmatched-iaq.py, so a geometry fix
+(e.g. honouring interior-ring holes) only has to be made once. This script
+imports from api/ (not the other way around).
+
     venv/bin/python scripts/build_parcel_address_index.py            # dry run
     venv/bin/python scripts/build_parcel_address_index.py --publish  # upsert
 """
@@ -23,58 +29,24 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 PARCELS = REPO / "output" / "parcels_keystone.geojson"
 
-
-def _rings(geom: dict) -> list:
-    t = (geom or {}).get("type")
-    if t == "Polygon":
-        return [geom["coordinates"]]
-    if t == "MultiPolygon":
-        return list(geom["coordinates"])
-    return []
-
-
-def _point_in_ring(x: float, y: float, ring: list) -> bool:
-    inside = False
-    n = len(ring)
-    j = n - 1
-    for i in range(n):
-        xi, yi = ring[i][0], ring[i][1]
-        xj, yj = ring[j][0], ring[j][1]
-        if (yi > y) != (yj > y):
-            if x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-15) + xi:
-                inside = not inside
-        j = i
-    return inside
+sys.path.insert(0, str(REPO))
+from api.survey_logic import build_parcel_address_entries, lookup_parcel  # noqa: E402
 
 
 def build_index(parcel_geojson: dict) -> dict:
-    """Reduce the cadastre to {parcel_id, address, bbox, ring} entries."""
+    """Reduce the cadastre to compact per-polygon entries (address, bbox,
+    outer ring, and any interior-ring holes) via the shared builder in
+    api/survey_logic.py."""
     out = []
     for f in (parcel_geojson or {}).get("features") or []:
-        props = f.get("properties") or {}
-        addr = str(props.get("address") or "").strip()
-        if not addr:
-            continue
-        for poly in _rings(f.get("geometry") or {}):
-            ring = poly[0]
-            xs = [p[0] for p in ring]
-            ys = [p[1] for p in ring]
-            out.append({
-                "parcel_id": props.get("parcel_id"),
-                "address": addr,
-                "bbox": [min(xs), min(ys), max(xs), max(ys)],
-                "ring": [[round(p[0], 6), round(p[1], 6)] for p in ring],
-            })
+        out.extend(build_parcel_address_entries(f))
     return {"version": 1, "parcels": out}
 
 
 def lookup_address(index: dict, lon: float, lat: float) -> str | None:
-    """Return the county address of the parcel containing (lon, lat)."""
-    for p in (index or {}).get("parcels") or []:
-        x0, y0, x1, y1 = p["bbox"]
-        if x0 <= lon <= x1 and y0 <= lat <= y1 and _point_in_ring(lon, lat, p["ring"]):
-            return p["address"]
-    return None
+    """Return the county address of the parcel containing (lon, lat), or
+    None (including when the point falls inside a hole)."""
+    return lookup_parcel(index, lon, lat)[0]
 
 
 def _env() -> tuple[str, str]:

@@ -199,3 +199,100 @@ def orphan_iaq_features(iaq_features: list, contact_features: list,
             continue
         out.append(f)
     return out
+
+
+# ── Shared parcel address-index geometry (single source of truth) ─────────
+#
+# Fix 2026-08-10 round 1: this ray-cast used to be duplicated in
+# scripts/build_parcel_address_index.py AND api/unmatched-iaq.py, and both
+# copies only tested the outer ring — a point inside an interior ring
+# (a hole, e.g. a courtyard or an easement cut out of a parcel) was wrongly
+# reported as inside that parcel and handed that parcel's street address to
+# a surveyor. Both call sites now import the ray-cast and lookup from here
+# so a future fix only has to happen once.
+
+
+def _point_in_ring(x: float, y: float, ring: list) -> bool:
+    """Standard even-odd ray-cast against a single linear ring."""
+    inside = False
+    n = len(ring)
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i][0], ring[i][1]
+        xj, yj = ring[j][0], ring[j][1]
+        if (yi > y) != (yj > y):
+            if x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-15) + xi:
+                inside = not inside
+        j = i
+    return inside
+
+
+def point_in_polygon(x: float, y: float, outer_ring: list, hole_rings: list = None) -> bool:
+    """A point is inside a polygon only if it's inside the outer ring AND
+    not inside any interior ring (hole). A point sitting in a hole belongs
+    to no parcel, however confidently the outer-ring test alone would have
+    placed it."""
+    if not _point_in_ring(x, y, outer_ring):
+        return False
+    for hole in hole_rings or []:
+        if _point_in_ring(x, y, hole):
+            return False
+    return True
+
+
+def polygon_rings(geometry: dict) -> list:
+    """Return [(outer_ring, [hole_ring, ...]), ...] for a Polygon or
+    MultiPolygon GeoJSON geometry. Each *_ring is a coordinate list
+    ``[[lon, lat], ...]``. Any other geometry type yields ``[]``."""
+    t = (geometry or {}).get("type")
+    coords = (geometry or {}).get("coordinates") or []
+    if t == "Polygon":
+        polys = [coords]
+    elif t == "MultiPolygon":
+        polys = coords
+    else:
+        return []
+    out = []
+    for poly in polys:
+        if not poly:
+            continue
+        out.append((poly[0], poly[1:]))
+    return out
+
+
+def build_parcel_address_entries(feature: dict) -> list:
+    """Reduce one parcel GeoJSON ``Feature`` into compact index entries —
+    one per polygon part (a MultiPolygon parcel yields several). Each entry
+    carries the outer ring, any interior rings (holes), and a bbox computed
+    from the outer ring only (a cheap pre-filter — see ``lookup_parcel``).
+    Skips parcels with no address on file."""
+    props = (feature or {}).get("properties") or {}
+    addr = str(props.get("address") or "").strip()
+    if not addr:
+        return []
+    out = []
+    for outer, holes in polygon_rings((feature or {}).get("geometry") or {}):
+        xs = [p[0] for p in outer]
+        ys = [p[1] for p in outer]
+        out.append({
+            "parcel_id": props.get("parcel_id"),
+            "address": addr,
+            "bbox": [min(xs), min(ys), max(xs), max(ys)],
+            "ring": [[round(p[0], 6), round(p[1], 6)] for p in outer],
+            "holes": [[[round(p[0], 6), round(p[1], 6)] for p in hole] for hole in holes],
+        })
+    return out
+
+
+def lookup_parcel(index: dict, lon: float, lat: float):
+    """Return ``(address, parcel_id)`` of the parcel containing (lon, lat),
+    honouring interior rings, or ``(None, None)`` if no parcel matches
+    (including a point that lands inside a hole). Cheap on a miss: the
+    bbox check short-circuits before the ray-cast runs."""
+    for p in (index or {}).get("parcels") or []:
+        x0, y0, x1, y1 = p["bbox"]
+        if not (x0 <= lon <= x1 and y0 <= lat <= y1):
+            continue
+        if point_in_polygon(lon, lat, p["ring"], p.get("holes")):
+            return p["address"], p.get("parcel_id")
+    return None, None
