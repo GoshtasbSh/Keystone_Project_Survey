@@ -180,6 +180,29 @@ def evaluate_iaq_upload_safety(stored_features: list, incoming_features: list,
     return {'allowed': True, 'reason': None, 'detail': '', 'diff': diff}
 
 
+def _insert_version_row(sb, base_fields: dict, extra_fields: dict) -> None:
+    """Insert a keystone_analysis_versions row, tolerating migration 26
+    (the upload-audit-trail columns) not having been applied yet.
+
+    `base_fields` is the original, always-present column set (data_type,
+    payload, label, n_points). `extra_fields` is the new audit-trail data
+    (uploaded_by_user_id, source_filename, dropped_response_ids, ...).
+
+    We try the enriched insert first. PostgREST rejects inserts that
+    reference columns the schema doesn't have, and this code ships before
+    the migration is guaranteed to be applied — so on ANY exception we log
+    it and retry with only `base_fields`, so an upload never fails purely
+    because the audit columns don't exist yet.
+    """
+    try:
+        sb.table('keystone_analysis_versions').insert({**base_fields, **extra_fields}).execute()
+        return
+    except Exception as e:
+        print(f"[upload] enriched version insert failed ({type(e).__name__}: {e}) — "
+              f"retrying with base columns only (migration 26 not applied?)")
+    sb.table('keystone_analysis_versions').insert(base_fields).execute()
+
+
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
@@ -193,7 +216,14 @@ class handler(BaseHTTPRequestHandler):
 
     # ── Dispatcher ──────────────────────────────────────────────────────
     def _dispatch(self):
-        if require_admin(self) is None:
+        # Captured for the audit-trail columns (migration 26) — the caller's
+        # auth.users id, so `keystone_analysis_versions.uploaded_by_user_id`
+        # can name who uploaded a given file. require_admin() only surfaces
+        # the id (not email — that would need an extra Supabase Auth Admin
+        # round-trip we don't want blocking every upload), so
+        # uploaded_by_email is left NULL; see _insert_version_row callers.
+        admin_uid = require_admin(self)
+        if admin_uid is None:
             return
         qs   = parse_qs(urlparse(self.path).query)
         kind = (qs.get('type', ['iaq'])[0] or 'iaq').lower()
@@ -211,15 +241,15 @@ class handler(BaseHTTPRequestHandler):
             return json_response(self, 400, {'detail': 'No file received.'})
 
         if kind == 'iaq':
-            return self._handle_iaq(filename, file_bytes)
+            return self._handle_iaq(filename, file_bytes, admin_uid)
         if kind == 'survey':
-            return self._handle_survey(filename, file_bytes)
+            return self._handle_survey(filename, file_bytes, admin_uid)
         if kind == 'results':
             return self._handle_results(filename, file_bytes)
         return json_response(self, 400, {'detail': f"Unknown ?type={kind!r}"})
 
     # ── IAQ ─────────────────────────────────────────────────────────────
-    def _handle_iaq(self, filename: str, csv_bytes: bytes):
+    def _handle_iaq(self, filename: str, csv_bytes: bytes, admin_uid=None):
         if Path(filename or '').suffix.lower() != '.csv':
             return json_response(self, 400, {
                 'detail': (
@@ -308,12 +338,25 @@ class handler(BaseHTTPRequestHandler):
             {'data_type': 'iaq_survey', 'payload': payload},
             on_conflict='data_type',
         ).execute()
-        sb.table('keystone_analysis_versions').insert({
-            'data_type': 'iaq_survey',
-            'payload':   payload,
-            'label':     f'Vercel Upload {today} — {n} responses · {filename}',
-            'n_points':  n,
-        }).execute()
+        _insert_version_row(
+            sb,
+            base_fields={
+                'data_type': 'iaq_survey',
+                'payload':   payload,
+                'label':     f'Vercel Upload {today} — {n} responses · {filename}',
+                'n_points':  n,
+            },
+            extra_fields={
+                'uploaded_by_user_id':  admin_uid,
+                'uploaded_by_email':    None,  # not obtainable without a blocking Auth Admin call — see _dispatch
+                'source_filename':      filename,
+                'source_row_count':     n,
+                'geocoded_count':       n,
+                'failed_geocodes':      failed_geocodes or [],
+                'dropped_response_ids': _safety['diff']['dropped'],
+                'forced':               _force,
+            },
+        )
 
         # Tag every contact with its match_status (G1/G2 stroke encoding
         # on the desktop map). Run regardless of whether n_upgraded > 0
@@ -442,7 +485,7 @@ class handler(BaseHTTPRequestHandler):
         })
 
     # ── Survey (community contacts) ────────────────────────────────────
-    def _handle_survey(self, filename: str, file_bytes: bytes):
+    def _handle_survey(self, filename: str, file_bytes: bytes, admin_uid=None):
         suf = Path(filename or '').suffix.lower()
         if suf not in ('.xlsx', '.xls', '.csv'):
             return json_response(self, 400, {'detail': 'Upload an Excel (.xlsx/.xls) or CSV file.'})
@@ -496,12 +539,23 @@ class handler(BaseHTTPRequestHandler):
             {'data_type': 'community_contact', 'payload': survey_data},
             on_conflict='data_type',
         ).execute()
-        sb.table('keystone_analysis_versions').insert({
-            'data_type': 'community_contact',
-            'payload':   survey_data,
-            'label':     label,
-            'n_points':  n,
-        }).execute()
+        _insert_version_row(
+            sb,
+            base_fields={
+                'data_type': 'community_contact',
+                'payload':   survey_data,
+                'label':     label,
+                'n_points':  n,
+            },
+            extra_fields={
+                'uploaded_by_user_id':  admin_uid,
+                'uploaded_by_email':    None,  # not obtainable without a blocking Auth Admin call — see _dispatch
+                'source_filename':      filename,
+                'source_row_count':     len(contact_feats),
+                'geocoded_count':       n,
+                'failed_geocodes':      failed_geocodes or [],
+            },
+        )
         contact_analysis = compute_contact_analysis(survey_data.get('features', []))
         # Same parcel-preservation merge as the IAQ branch — without
         # this, every survey CSV upload zeros out the Parcels tab on
