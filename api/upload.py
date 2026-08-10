@@ -193,6 +193,13 @@ def _insert_version_row(sb, base_fields: dict, extra_fields: dict) -> None:
     the migration is guaranteed to be applied — so on ANY exception we log
     it and retry with only `base_fields`, so an upload never fails purely
     because the audit columns don't exist yet.
+
+    The version row is an audit convenience, not the upload's real data
+    (that's `keystone_dashboard_data`, already upserted by the caller
+    before this runs). So neither insert is allowed to raise: if the base
+    retry *also* fails, we log it and return normally rather than let the
+    exception escape to `do_POST`'s outer handler — a missing audit row
+    must never turn into a false "your upload failed" 500 for the admin.
     """
     try:
         sb.table('keystone_analysis_versions').insert({**base_fields, **extra_fields}).execute()
@@ -200,7 +207,45 @@ def _insert_version_row(sb, base_fields: dict, extra_fields: dict) -> None:
     except Exception as e:
         print(f"[upload] enriched version insert failed ({type(e).__name__}: {e}) — "
               f"retrying with base columns only (migration 26 not applied?)")
-    sb.table('keystone_analysis_versions').insert(base_fields).execute()
+    try:
+        sb.table('keystone_analysis_versions').insert(base_fields).execute()
+    except Exception as e:
+        print(f"[upload] base version insert ALSO failed ({type(e).__name__}: {e}) — "
+              f"giving up on the audit row for this upload; the real data "
+              f"was already saved to keystone_dashboard_data.")
+
+
+def _resolve_uploader_email(sb, uid):
+    """Best-effort lookup of the uploader's email for the audit trail.
+
+    Uses the Supabase Auth Admin API (`sb.auth.admin.get_user_by_id`),
+    which is only reachable with a service-role client. `team_members`
+    has no email column (see supabase/migrations/09_team_membership.sql)
+    and `require_auth`/`require_team_member`/`require_admin` intentionally
+    return only a bare uid — widening those signatures would touch every
+    other caller across the codebase, so this is a small, self-contained
+    helper instead.
+
+    This must NEVER raise and NEVER block the upload: on any failure
+    (missing client, missing uid, the installed supabase-py version not
+    exposing `.auth.admin`, a network/permissions error, ...) it logs and
+    returns None so `uploaded_by_email` stays NULL, same as before.
+    """
+    if not sb or not uid:
+        return None
+    try:
+        admin_api = getattr(getattr(sb, 'auth', None), 'admin', None)
+        get_user_by_id = getattr(admin_api, 'get_user_by_id', None)
+        if not callable(get_user_by_id):
+            return None
+        resp = get_user_by_id(uid)
+        user = getattr(resp, 'user', None)
+        email = getattr(user, 'email', None) if user else None
+        return email or None
+    except Exception as e:
+        print(f"[upload] uploader email lookup failed ({type(e).__name__}: {e}) — "
+              f"leaving uploaded_by_email NULL")
+        return None
 
 
 class handler(BaseHTTPRequestHandler):
@@ -219,12 +264,14 @@ class handler(BaseHTTPRequestHandler):
         # Captured for the audit-trail columns (migration 26) — the caller's
         # auth.users id, so `keystone_analysis_versions.uploaded_by_user_id`
         # can name who uploaded a given file. require_admin() only surfaces
-        # the id (not email — that would need an extra Supabase Auth Admin
-        # round-trip we don't want blocking every upload), so
-        # uploaded_by_email is left NULL; see _insert_version_row callers.
+        # the id (widening it would touch every other caller — see
+        # _resolve_uploader_email's docstring), so the email is resolved
+        # separately, once per upload, via a best-effort Auth Admin API
+        # lookup that never raises and never blocks the upload on failure.
         admin_uid = require_admin(self)
         if admin_uid is None:
             return
+        uploader_email = _resolve_uploader_email(supabase_admin(), admin_uid)
         qs   = parse_qs(urlparse(self.path).query)
         kind = (qs.get('type', ['iaq'])[0] or 'iaq').lower()
 
@@ -241,15 +288,15 @@ class handler(BaseHTTPRequestHandler):
             return json_response(self, 400, {'detail': 'No file received.'})
 
         if kind == 'iaq':
-            return self._handle_iaq(filename, file_bytes, admin_uid)
+            return self._handle_iaq(filename, file_bytes, admin_uid, uploader_email)
         if kind == 'survey':
-            return self._handle_survey(filename, file_bytes, admin_uid)
+            return self._handle_survey(filename, file_bytes, admin_uid, uploader_email)
         if kind == 'results':
             return self._handle_results(filename, file_bytes)
         return json_response(self, 400, {'detail': f"Unknown ?type={kind!r}"})
 
     # ── IAQ ─────────────────────────────────────────────────────────────
-    def _handle_iaq(self, filename: str, csv_bytes: bytes, admin_uid=None):
+    def _handle_iaq(self, filename: str, csv_bytes: bytes, admin_uid=None, uploader_email=None):
         if Path(filename or '').suffix.lower() != '.csv':
             return json_response(self, 400, {
                 'detail': (
@@ -348,7 +395,7 @@ class handler(BaseHTTPRequestHandler):
             },
             extra_fields={
                 'uploaded_by_user_id':  admin_uid,
-                'uploaded_by_email':    None,  # not obtainable without a blocking Auth Admin call — see _dispatch
+                'uploaded_by_email':    uploader_email,  # best-effort — see _resolve_uploader_email
                 'source_filename':      filename,
                 'source_row_count':     n,
                 'geocoded_count':       n,
@@ -485,7 +532,7 @@ class handler(BaseHTTPRequestHandler):
         })
 
     # ── Survey (community contacts) ────────────────────────────────────
-    def _handle_survey(self, filename: str, file_bytes: bytes, admin_uid=None):
+    def _handle_survey(self, filename: str, file_bytes: bytes, admin_uid=None, uploader_email=None):
         suf = Path(filename or '').suffix.lower()
         if suf not in ('.xlsx', '.xls', '.csv'):
             return json_response(self, 400, {'detail': 'Upload an Excel (.xlsx/.xls) or CSV file.'})
@@ -549,7 +596,7 @@ class handler(BaseHTTPRequestHandler):
             },
             extra_fields={
                 'uploaded_by_user_id':  admin_uid,
-                'uploaded_by_email':    None,  # not obtainable without a blocking Auth Admin call — see _dispatch
+                'uploaded_by_email':    uploader_email,  # best-effort — see _resolve_uploader_email
                 'source_filename':      filename,
                 'source_row_count':     len(contact_feats),
                 'geocoded_count':       n,
