@@ -1423,6 +1423,34 @@ def _apply_iaq_to_field_features(field_features: list, iaq_features: list,
     return upgraded
 
 
+def diff_iaq_response_ids(stored_features: list, incoming_features: list) -> dict:
+    """Compare stored vs incoming IAQ features by Qualtrics ResponseId.
+
+    Guards the 2026-05-06 failure mode: a 60-response test export replaced a
+    75-response real export and silently deleted 15 households for 75 days.
+
+    Features without a ``response_id`` (pre-2026-05 blobs) are ignored on the
+    stored side so a legacy blob can never produce a false regression.
+
+    Returns ``{"dropped": [...], "added": [...], "is_regression": bool}``.
+    """
+    def _ids(feats):
+        out = set()
+        for f in feats or []:
+            rid = ((f or {}).get("properties") or {}).get("response_id")
+            if rid:
+                out.add(str(rid))
+        return out
+
+    old, new = _ids(stored_features), _ids(incoming_features)
+    dropped = sorted(old - new)
+    return {
+        "dropped": dropped,
+        "added": sorted(new - old),
+        "is_regression": bool(old) and bool(dropped),
+    }
+
+
 # ── Analysis stats (identical to app.py) ──────────────────────────────────────
 
 def _compute_iaq_analysis(features: list) -> dict:
