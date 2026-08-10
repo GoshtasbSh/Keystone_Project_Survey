@@ -748,6 +748,21 @@ button{cursor:pointer;font-family:'Inter',system-ui,sans-serif;border:none;backg
 }
 .email-send:hover{filter:brightness(1.07);}
 .email-send:active{transform:scale(.97);}
+
+/* Already-Responded panel (survey-only households, tap-to-locate list) */
+.orphan-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;}
+.orphan-row{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:12px 14px;cursor:pointer;transition:background .12s,border-color .12s;
+}
+.orphan-row:hover{background:var(--card-2);border-color:rgba(139,92,246,.4);}
+.orphan-row-addr{font-size:13px;font-weight:600;color:var(--text);}
+.orphan-row-addr.pending{font-style:italic;font-weight:500;color:var(--muted);}
+.orphan-row-risk{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:#8b5cf6;background:rgba(139,92,246,.14);border:1px solid rgba(139,92,246,.35);
+  padding:2px 8px;border-radius:8px;flex-shrink:0;}
+.orphan-empty{list-style:none;text-align:center;color:var(--muted);font-size:12.5px;padding:30px 10px;}
 </style>
 </head>
 <body>
@@ -1136,6 +1151,16 @@ button{cursor:pointer;font-family:'Inter',system-ui,sans-serif;border:none;backg
 
 </div>
 
+<!-- ALREADY-RESPONDED PANEL — tap-to-locate list of survey-only households.
+     A map layer alone isn't enough when the surveyor is walking a route
+     door to door; this is the readable, scrollable list version of the
+     same 21 (currently) households. -->
+<div class="side-panel" id="panel-orphan">
+  <div class="panel-title">Already Responded</div>
+  <div class="panel-sub">Completed the online survey — no canvass record. You do not need to knock these doors.</div>
+  <ul class="orphan-list" id="orphan-list"></ul>
+</div>
+
 <!-- BOTTOM TAB BAR -->
 <nav class="tabbar">
   <button class="tab-btn active" id="tab-map" onclick="switchTab('map')">
@@ -1146,6 +1171,11 @@ button{cursor:pointer;font-family:'Inter',system-ui,sans-serif;border:none;backg
     <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
     <span>Team</span>
     <div class="tab-badge" id="team-badge">0</div>
+  </button>
+  <button class="tab-btn" id="tab-orphan" onclick="switchTab('orphan')">
+    <svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+    <span>Responded</span>
+    <div class="tab-badge" id="orphan-tab-badge">0</div>
   </button>
   <button class="tab-btn" id="tab-export" onclick="switchTab('export')">
     <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -1724,6 +1754,11 @@ function _orphanLabel(p) {
 function updateOrphanBadge(n) {
   const b = document.getElementById('orphan-badge');
   if (b) b.textContent = String(n);
+  const tb = document.getElementById('orphan-tab-badge');
+  if (tb) {
+    tb.textContent = String(n);
+    tb.classList.toggle('show', n > 0);
+  }
 }
 function addOrphanIAQLayer(gj) {
   if (map.getSource('orphan-iaq')) {
@@ -3250,6 +3285,7 @@ function switchTab(name) {
   document.querySelectorAll('.side-panel').forEach(p => p.classList.remove('active'));
   if (name === 'team')   { document.getElementById('panel-team').classList.add('active');   switchMobileTeamSubtab('activity'); loadTodayMessages(); }
   if (name === 'export') { document.getElementById('panel-export').classList.add('active'); renderExportStats(); }
+  if (name === 'orphan') { document.getElementById('panel-orphan').classList.add('active'); renderOrphanList(_orphanFeatures); }
 }
 
 /* ── TEAM PANEL ── */
@@ -3951,6 +3987,38 @@ function renderExportStats() {
       const cSafe = /^#[0-9a-fA-F]{3,8}$/.test(String(c || '')) ? c : '#9ca3af';
       return `<span class="exp-breakdown-chip"><span class="exp-breakdown-dot" style="background:${cSafe}"></span>${_esc(s)} ${Number(n)||0}</span>`;
     }).join('');
+}
+
+/* ── ALREADY-RESPONDED LIST PANEL ── */
+// Sorted on orphan_label (the safe display label, real address when
+// known) rather than the raw parcel_address — right now every feature's
+// parcel_address is the identical "Address not on file" fallback (the
+// address index blob hasn't been published yet), which would make an
+// address-sort a no-op. Sorting on the label groups by street name in
+// the meantime and switches to true address order the moment real
+// addresses start flowing in, with no further change needed here.
+function renderOrphanList(features) {
+  const rows = (features || [])
+    .slice()
+    .sort((a, b) => String(a.properties.orphan_label || a.properties.parcel_address)
+      .localeCompare(String(b.properties.orphan_label || b.properties.parcel_address)))
+    .map(f => {
+      const p = f.properties || {};
+      const known = !!(p.parcel_address && p.parcel_address !== ORPHAN_FALLBACK_ADDR);
+      const label = p.orphan_label || _orphanLabel(p);
+      return `
+      <li class="orphan-row" onclick="flyToOrphan(${f.geometry.coordinates[0]},${f.geometry.coordinates[1]})">
+        <span class="orphan-row-addr${known ? '' : ' pending'}">${_esc(label)}</span>
+        <span class="orphan-row-risk">${_esc(p.risk_tier || '')}</span>
+      </li>`;
+    }).join('');
+  document.getElementById('orphan-list').innerHTML =
+    rows || '<li class="orphan-empty">No survey-only households.</li>';
+}
+
+function flyToOrphan(lon, lat) {
+  switchTab('map');
+  map.flyTo({ center: [lon, lat], zoom: 18 });
 }
 
 async function emailData() {
