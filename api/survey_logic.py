@@ -159,3 +159,43 @@ def build_validation_summary(iaq_features: list, contact_features: list) -> dict
         "match_details": match_details,
         "unmatched_by_street": dict(unmatched_by_street),
     }
+
+
+ORPHAN_RADIUS_M = 25.0
+
+
+def orphan_iaq_features(iaq_features: list, contact_features: list,
+                        radius_m: float = ORPHAN_RADIUS_M) -> list:
+    """Return IAQ responses that have no *addressed* canvass record nearby.
+
+    Deliberately ignores ``iaq_matched``. A response can be flagged matched
+    purely because an anonymous field pin landed on its parcel — that is
+    what happened at 6409 Beloit on 2026-07-21, and it silently removed the
+    household from the manual-fix worklist without recording an address.
+    Only a contact feature that actually carries an ``address`` counts as
+    a rescue.
+
+    ``radius_m`` defaults to 25 m — tighter than one suburban lot, so a
+    neighbour's record never masks a genuine orphan.
+    """
+    addressed = []
+    for cf in contact_features or []:
+        props = (cf or {}).get("properties") or {}
+        if not str(props.get("address") or "").strip():
+            continue
+        coords = ((cf.get("geometry") or {}).get("coordinates") or [None, None])
+        if coords[0] is None or coords[1] is None:
+            continue
+        addressed.append((float(coords[0]), float(coords[1])))
+
+    out = []
+    for f in iaq_features or []:
+        coords = ((f.get("geometry") or {}).get("coordinates") or [None, None])
+        if coords[0] is None or coords[1] is None:
+            continue
+        lon, lat = float(coords[0]), float(coords[1])
+        if any(haversine_m(lat, lon, c_lat, c_lon) <= radius_m
+               for c_lon, c_lat in addressed):
+            continue
+        out.append(f)
+    return out
