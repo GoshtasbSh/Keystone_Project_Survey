@@ -162,6 +162,9 @@ button{cursor:pointer;font-family:'Inter',system-ui,sans-serif;border:none;backg
 .layer-row:hover{background:var(--sb-hover);}
 .ld{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
 .ll{flex:1;font-size:13px;font-weight:500;color:var(--sb-txt);}
+.badge{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;
+  padding:0 4px;margin-left:6px;border-radius:8px;background:#8b5cf6;color:#fff;
+  font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:700;line-height:16px;}
 .tgl{position:relative;width:38px;height:22px;flex-shrink:0;}
 .tgl input{opacity:0;width:0;height:0;}
 .tgl-track{position:absolute;inset:0;border-radius:11px;background:var(--toggle-off);cursor:pointer;transition:background .2s;}
@@ -372,6 +375,14 @@ button{cursor:pointer;font-family:'Inter',system-ui,sans-serif;border:none;backg
 .pp-btn-edit:hover{background:rgba(99,102,241,.12);border-color:var(--accent);}
 .pp-btn-delete{color:#ef4444;}
 .pp-btn-delete:hover{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.4);}
+
+/* ── ORPHAN (survey-only, no canvass record) popup ── */
+.orphan-tag{font-family:'Plus Jakarta Sans',sans-serif;font-size:10px;font-weight:800;
+  letter-spacing:.04em;text-transform:uppercase;color:#8b5cf6;margin-bottom:5px;}
+.orphan-addr{font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;}
+.orphan-addr.pending{font-style:italic;font-weight:600;color:var(--muted);}
+.orphan-meta{font-size:11px;color:var(--muted);margin-bottom:2px;}
+.orphan-note{font-size:11px;color:var(--muted);margin-top:7px;padding-top:7px;border-top:1px solid var(--border);}
 
 /* ── FAB ── */
 .fab{
@@ -808,6 +819,14 @@ button{cursor:pointer;font-family:'Inter',system-ui,sans-serif;border:none;backg
           <div class="ll">Qualtric IAQ Survey</div>
           <label class="tgl">
             <input type="checkbox" id="tgl-iaq" onchange="toggleLayer('iaq',this.checked)">
+            <div class="tgl-track"></div><div class="tgl-thumb"></div>
+          </label>
+        </label>
+        <label class="layer-row" title="Households that completed the Qualtrics survey but have no canvass record. You do not need to knock these doors.">
+          <div class="ld" style="background:#8b5cf6"></div>
+          <div class="ll">Already Responded <span id="orphan-badge" class="badge">0</span></div>
+          <label class="tgl">
+            <input type="checkbox" id="tgl-orphan" checked onchange="toggleLayer('orphan',this.checked)">
             <div class="tgl-track"></div><div class="tgl-thumb"></div>
           </label>
         </label>
@@ -1685,6 +1704,101 @@ function addIAQLayer(iaqPts) {
   }, iaqBefore);
 }
 
+/* ── SURVEY-ONLY (already responded, never canvassed) ──────────────
+   Purple ring + permanent address label. Deliberately louder than the
+   plain IAQ risk dots: this is an action signal ("don't knock"), not a
+   background statistic. Visible by default — the whole point is that
+   the surveyor sees it without knowing to turn a layer on. */
+let _orphanFeatures = [];
+// Must match FALLBACK_ADDRESS in api/unmatched-iaq.py — the parcel
+// address index blob hasn't been published to production yet, so every
+// feature currently comes back with this exact string. Never show that
+// literal text as if it were a real street address (it isn't data, it's
+// "we don't know yet"); fall back to the coarse, non-private street name
+// the server already returns instead.
+const ORPHAN_FALLBACK_ADDR = 'Address not on file';
+function _orphanLabel(p) {
+  if (p.parcel_address && p.parcel_address !== ORPHAN_FALLBACK_ADDR) return p.parcel_address;
+  return p.street_name ? `${p.street_name} (address pending)` : 'Address pending';
+}
+function updateOrphanBadge(n) {
+  const b = document.getElementById('orphan-badge');
+  if (b) b.textContent = String(n);
+}
+function addOrphanIAQLayer(gj) {
+  if (map.getSource('orphan-iaq')) {
+    map.getSource('orphan-iaq').setData(gj);
+    return;
+  }
+  map.addSource('orphan-iaq', { type: 'geojson', data: gj });
+
+  map.addLayer({
+    id: 'orphan-iaq-halo', type: 'circle', source: 'orphan-iaq',
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 9, 16, 15, 19, 22],
+      'circle-color': '#8b5cf6',
+      'circle-opacity': 0.22,
+      'circle-stroke-width': 2.5,
+      'circle-stroke-color': '#8b5cf6',
+    },
+  });
+
+  map.addLayer({
+    id: 'orphan-iaq-dots', type: 'circle', source: 'orphan-iaq',
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 4, 16, 7, 19, 10],
+      'circle-color': '#ffffff',
+      'circle-stroke-width': 2,
+      'circle-stroke-color': '#8b5cf6',
+    },
+  });
+
+  // The address label is the feature. Without it the marker is useless
+  // at the door — that was the 6409 Beloit failure. Uses the precomputed
+  // orphan_label (real address when known, a safe placeholder when not)
+  // rather than the raw parcel_address, so the fallback string never
+  // gets stamped onto the map as if it were data.
+  map.addLayer({
+    id: 'orphan-iaq-labels', type: 'symbol', source: 'orphan-iaq',
+    layout: {
+      'text-field': ['get', 'orphan_label'],
+      'text-size': ['interpolate', ['linear'], ['zoom'], 14, 10, 17, 13],
+      'text-offset': [0, 1.5],
+      'text-anchor': 'top',
+      'text-allow-overlap': false,
+      'text-optional': true,
+    },
+    paint: {
+      'text-color': '#6d28d9',
+      'text-halo-color': '#ffffff',
+      'text-halo-width': 1.8,
+    },
+    minzoom: 14,
+  });
+
+  map.on('click', 'orphan-iaq-halo', e => {
+    const p = e.features[0].properties || {};
+    const known = !!(p.parcel_address && p.parcel_address !== ORPHAN_FALLBACK_ADDR);
+    const label = p.orphan_label || _orphanLabel(p);
+    new maplibregl.Popup({ offset: 14 })
+      .setLngLat(e.lngLat)
+      .setHTML(`
+        <div class="orphan-popup">
+          <div class="orphan-tag">ALREADY RESPONDED — no visit needed</div>
+          <div class="orphan-addr${known ? '' : ' pending'}">${_esc(label)}</div>
+          <div class="orphan-meta">Qualtrics risk: ${_esc(String(p.overall_risk ?? '—'))}
+            (${_esc(p.risk_tier || '—')})</div>
+          <div class="orphan-note">This household completed the online survey but has
+            no canvass record.${known
+              ? ' Add a point here only to attach an address.'
+              : ' The exact address has not been matched to a parcel yet &mdash; this pin\'s location is accurate.'}</div>
+        </div>`)
+      .addTo(map);
+  });
+  map.on('mouseenter','orphan-iaq-halo',() => { if (!placingMode) map.getCanvas().style.cursor='pointer'; });
+  map.on('mouseleave','orphan-iaq-halo',() => { map.getCanvas().style.cursor = placingMode ? 'crosshair' : ''; });
+}
+
 /* ── LOAD SUPABASE DATA ── */
 async function loadSupabaseData() {
   try {
@@ -1736,6 +1850,23 @@ async function loadSupabaseData() {
       if (iaqPts.length) addIAQLayer(iaqPts);
     }
   } catch (e) { console.warn('Load IAQ failed:', e); }
+
+  // Survey-only households: answered Qualtrics, never canvassed.
+  // These are the doors a surveyor does NOT need to knock.
+  try {
+    const r3 = await fetch('/api/unmatched-iaq');
+    if (r3.ok) {
+      const gj3 = await r3.json();
+      _orphanFeatures = (gj3.features || []).map(f => {
+        const p = f.properties || {};
+        return { ...f, properties: { ...p, orphan_label: _orphanLabel(p) } };
+      });
+      if (_orphanFeatures.length) {
+        addOrphanIAQLayer({ type: 'FeatureCollection', features: _orphanFeatures });
+      }
+      updateOrphanBadge(_orphanFeatures.length);
+    }
+  } catch (e) { console.warn('Load survey-only failed:', e); }
 }
 
 /* ── REALTIME ── */
@@ -2651,6 +2782,7 @@ function toggleLayer(name, on) {
     survey:    ['survey-glow','survey-dots','survey-labels'],
     community: ['community-dots'],
     iaq:       ['iaq-dots'],
+    orphan:    ['orphan-iaq-halo','orphan-iaq-dots','orphan-iaq-labels'],
   };
   (layerMap[name] || []).forEach(id => {
     if (map && map.getLayer(id)) map.setLayoutProperty(id,'visibility', on ? 'visible' : 'none');
