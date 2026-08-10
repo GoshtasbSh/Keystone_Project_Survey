@@ -40,3 +40,41 @@ class DiffResponseIdsTests(unittest.TestCase):
         self.assertFalse(d["is_regression"])
         self.assertEqual(d["dropped"], [])
         self.assertEqual(d["added"], [])
+
+
+from api.upload import evaluate_iaq_upload_safety
+
+
+class UploadSafetyTests(unittest.TestCase):
+    def test_regression_is_blocked_without_force(self):
+        v = evaluate_iaq_upload_safety(
+            stored_features=[feat("R_1"), feat("R_2")],
+            incoming_features=[feat("R_1")],
+            analysis={}, filename="V2_test_May 4.csv", force=False)
+        self.assertFalse(v["allowed"])
+        self.assertIn("R_2", v["detail"])
+        self.assertEqual(v["reason"], "response_regression")
+
+    def test_regression_is_allowed_with_force(self):
+        v = evaluate_iaq_upload_safety(
+            stored_features=[feat("R_1"), feat("R_2")],
+            incoming_features=[feat("R_1")],
+            analysis={}, filename="x.csv", force=True)
+        self.assertTrue(v["allowed"])
+
+    def test_degraded_export_is_blocked_without_force(self):
+        v = evaluate_iaq_upload_safety(
+            stored_features=[], incoming_features=[feat("R_1")],
+            analysis={"validation_warnings": {
+                "missing_columns": {"iaq": ["Cooling System _1"]}}},
+            filename="V2_test.csv", force=False)
+        self.assertFalse(v["allowed"])
+        self.assertEqual(v["reason"], "degraded_export")
+
+    def test_clean_growing_upload_is_allowed(self):
+        v = evaluate_iaq_upload_safety(
+            stored_features=[feat("R_1")],
+            incoming_features=[feat("R_1"), feat("R_2")],
+            analysis={}, filename="V1_July 20.csv", force=False)
+        self.assertTrue(v["allowed"])
+        self.assertEqual(v["diff"]["added"], ["R_2"])

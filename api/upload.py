@@ -77,7 +77,7 @@ def _sync_community_contacts(sb, features: list) -> None:
         print(f'[upload/survey] community_contacts sync WARN {type(e).__name__}: {e}')
 
 
-def _field_row_to_feature(row: dict) -> dict | None:
+def _field_row_to_feature(row: dict):
     lon = row.get('lon')
     lat = row.get('lat')
     if lon is None or lat is None:
@@ -125,6 +125,59 @@ def _load_all_field_features(sb) -> list:
 def _is_field_feature(f: dict) -> bool:
     p = (f or {}).get('properties') or {}
     return p.get('source') == 'field' or p.get('field_point_id') is not None
+
+
+def evaluate_iaq_upload_safety(stored_features: list, incoming_features: list,
+                               analysis: dict, filename: str,
+                               force: bool) -> dict:
+    """Decide whether an IAQ upload may replace the stored blob.
+
+    Two independent blocks, both overridable with ?force=1:
+
+      1. response_regression — the incoming export is missing ResponseIds
+         that the stored blob has. This is the 2026-05-06 failure: a
+         60-response test export replaced a 75-response real one and hid
+         15 households for 75 days.
+      2. degraded_export — Qualtrics gave us a file with missing question
+         columns (their scores silently default to 0). The V2_test file
+         carried exactly this warning and it was stored and ignored.
+
+    Returns {"allowed": bool, "reason": str|None, "detail": str, "diff": {...}}.
+    """
+    from _processing import diff_iaq_response_ids
+
+    diff = diff_iaq_response_ids(stored_features, incoming_features)
+    missing = ((analysis or {}).get('validation_warnings') or {}).get('missing_columns') or {}
+
+    if diff['is_regression'] and not force:
+        lost = diff['dropped']
+        preview = ', '.join(lost[:10]) + ('…' if len(lost) > 10 else '')
+        return {
+            'allowed': False,
+            'reason': 'response_regression',
+            'detail': (
+                f"Refused: '{filename}' is missing {len(lost)} response(s) that are "
+                f"already stored, so uploading it would delete them from the map. "
+                f"Missing ResponseIds: {preview}. "
+                f"If this is intentional, re-upload with ?force=1."
+            ),
+            'diff': diff,
+        }
+
+    if missing and not force:
+        return {
+            'allowed': False,
+            'reason': 'degraded_export',
+            'detail': (
+                f"Refused: '{filename}' is missing expected Qualtrics columns "
+                f"({missing}); scores for those questions would default to 0. "
+                f"Re-export from Qualtrics with all question blocks included, "
+                f"or re-upload with ?force=1."
+            ),
+            'diff': diff,
+        }
+
+    return {'allowed': True, 'reason': None, 'detail': '', 'diff': diff}
 
 
 class handler(BaseHTTPRequestHandler):
@@ -214,6 +267,26 @@ class handler(BaseHTTPRequestHandler):
             tb = traceback.format_exc()
             print(f"[upload/iaq] processing FAIL {type(e).__name__}: {e}\n{tb[:2000]}")
             return json_response(self, 500, {'detail': 'Processing failed — check Vercel logs.'})
+
+        # ── SAFETY GUARD — must run before any upsert ────────────────
+        # Reads the currently-stored blob and refuses to replace it when
+        # that would delete responses or import a degraded export.
+        _stored_iaq = load_cached('iaq_survey') or {}
+        _stored_feats = (_stored_iaq.get('geojson') or {}).get('features') or []
+        _force = (parse_qs(urlparse(self.path).query).get('force', ['0'])[0] or '').lower() \
+                 in ('1', 'true', 'yes')
+        _safety = evaluate_iaq_upload_safety(
+            _stored_feats, geojson.get('features', []), analysis, filename, _force)
+        print(f"[upload/iaq] safety={_safety['reason'] or 'ok'} "
+              f"dropped={len(_safety['diff']['dropped'])} added={len(_safety['diff']['added'])} "
+              f"force={_force}")
+        if not _safety['allowed']:
+            return json_response(self, 409, {
+                'detail': _safety['detail'],
+                'reason': _safety['reason'],
+                'dropped_response_ids': _safety['diff']['dropped'],
+                'added_response_ids': _safety['diff']['added'],
+            })
 
         n     = len(geojson.get('features', []))
         today = datetime.now(timezone.utc).date().isoformat()
