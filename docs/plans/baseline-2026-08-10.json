@@ -1,0 +1,10 @@
+{
+  "n_contacts": 321,
+  "n_contacts_field": 44,
+  "n_iaq": 110,
+  "n_iaq_matched": 85,
+  "contact_addresses_sha256": "04bc60ac03bda82a2ab5295607a0b1919a11500b69bf52c132d7cbf72a07fbaa",
+  "contact_statuses_sha256": "aa0d082854aa5a0630bf1dadc99fd926b81dec8957a13767b32eeae633cf5f2c",
+  "iaq_response_ids_sha256": "aa6aefb8503193b017288d72314013c71c7ec205ba16952ddd4856e36a35c52b",
+  "scores_sha256": "7a94abc0e6efa5282a5c2ed1ab58c41b4aee436dbf9108e3284ae780e76cb4d1"
+}
