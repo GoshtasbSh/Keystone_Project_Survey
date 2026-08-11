@@ -1218,8 +1218,16 @@ button{cursor:pointer;font-family:'Inter',system-ui,sans-serif;border:none;backg
       <button class="bs-chip" onclick="appendNote('Dog on property')">Dog on property</button>
       <button class="bs-chip" onclick="appendNote('QR on door')">QR on door</button>
     </div>
-    <div class="bs-section-lbl">Address <span style="font-weight:400;opacity:.6;text-transform:none;letter-spacing:0">if known</span></div>
-    <input type="text" class="bs-input" id="bs-address" placeholder="e.g. 6409 Beloit Ave" autocomplete="off" maxlength="300">
+    <!-- I4 fix (2026-08-10): only NEW points persist this field (savePoint's
+         add-point path). No load query currently selects `address` back off
+         field_survey_points, and editing an existing pin never wrote it —
+         so this whole block is hidden in edit mode (see openEditSheet /
+         openBottomSheet) rather than showing an input that silently no-ops
+         on save. -->
+    <div id="bs-address-field">
+      <div class="bs-section-lbl">Address <span style="font-weight:400;opacity:.6;text-transform:none;letter-spacing:0">if known</span></div>
+      <input type="text" class="bs-input" id="bs-address" placeholder="e.g. 6409 Beloit Ave" autocomplete="off" maxlength="300">
+    </div>
     <div class="bs-section-lbl">Notes <span style="font-weight:400;opacity:.6;text-transform:none;letter-spacing:0">optional</span></div>
     <textarea class="bs-notes" id="bs-notes" placeholder='e.g. "Gate locked, return Thu PM"' rows="2"></textarea>
     <div class="bs-meta">
@@ -1751,7 +1759,7 @@ function addIAQLayer(iaqPts) {
    background statistic. Visible by default — the whole point is that
    the surveyor sees it without knowing to turn a layer on. */
 let _orphanFeatures = [];
-// Must match FALLBACK_ADDRESS in api/unmatched-iaq.py — the parcel
+// Must match FALLBACK_ADDRESS in api/iaq-points.py — the parcel
 // address index blob hasn't been published to production yet, so every
 // feature currently comes back with this exact string. Never show that
 // literal text as if it were a real street address (it isn't data, it's
@@ -1794,19 +1802,39 @@ function _nearestOrphanAddress(lat, lon) {
 
 // Insert a field_survey_points row, tolerating migration 27 (the optional
 // `address` column) not having been applied to production yet. Tries the
-// enriched insert first when an address was given; on ANY failure retries
-// with the base fields only, so a member's pin save never fails just
-// because that column is missing. Mirrors the fallback shape used
-// server-side in api/upload.py's _insert_version_row and
-// api/guest.py's _insert_field_point_row.
+// enriched insert first when an address was given; retries with the base
+// fields only when that fails because the column is missing, so a member's
+// pin save never fails just because migration 27 hasn't run. Mirrors the
+// fallback shape used server-side in api/upload.py's `_insert_version_row`
+// and api/guest.py's `_insert_field_point_row`.
+//
+// IMPORTANT (2026-08-10 C1 fix): supabase-js v2 does NOT throw on a
+// PostgREST error — it RESOLVES with `{ data, error }`. A missing `address`
+// column comes back as a resolved `error`, not a thrown exception, so the
+// try/catch below only catches genuine non-HTTP failures (network aborts
+// etc.). The primary detection has to inspect `res.error` directly.
 async function _insertFieldPointRow(fields) {
   const { address, ...base } = fields;
   if (address) {
+    let res;
     try {
-      return await sb.from('field_survey_points').insert({ ...base, address }).select('id').single();
+      res = await sb.from('field_survey_points').insert({ ...base, address }).select('id').single();
     } catch (err) {
-      console.warn('[field-point] insert with address failed, retrying without it:', err);
+      // Non-HTTP failure (e.g. network abort) — fall through to the
+      // base-only retry rather than silently losing the point.
+      console.warn('[field-point] insert with address threw, retrying without it:', err);
+      return await sb.from('field_survey_points').insert(base).select('id').single();
     }
+    if (!res.error) return res;
+    const msg = String(res.error.message || '').toLowerCase();
+    const code = res.error.code || '';
+    // Postgres undefined_column (42703) or PostgREST's "column not found"
+    // (PGRST204), or a message naming the address column as missing.
+    const isMissingAddressColumn =
+      code === '42703' || code === 'PGRST204' ||
+      (msg.includes('address') && (msg.includes('column') || msg.includes('does not exist') || msg.includes('could not find')));
+    if (!isMissingAddressColumn) return res; // real error — let the caller see it and queue
+    console.warn('[field-point] insert with address failed (column missing?), retrying without it:', res.error);
   }
   return await sb.from('field_survey_points').insert(base).select('id').single();
 }
@@ -1871,6 +1899,12 @@ function addOrphanIAQLayer(gj) {
   });
 
   map.on('click', 'orphan-iaq-halo', e => {
+    // I5 fix: this handler was missing the placingMode guard every sibling
+    // click handler has (survey-dots ~1601, community-dots ~1691) — tapping
+    // an orphan marker while placing a new pin popped this popup open on
+    // top of the bottom sheet instead of placing the pin.
+    if (placingMode) return;
+    e.preventDefault();
     const p = e.features[0].properties || {};
     const known = !!(p.parcel_address && p.parcel_address !== ORPHAN_FALLBACK_ADDR);
     const label = p.orphan_label || _orphanLabel(p);
@@ -1948,7 +1982,7 @@ async function loadSupabaseData() {
   // Survey-only households: answered Qualtrics, never canvassed.
   // These are the doors a surveyor does NOT need to knock.
   try {
-    const r3 = await fetch('/api/unmatched-iaq');
+    const r3 = await fetch('/api/iaq-points?unmatched=1');
     if (r3.ok) {
       const gj3 = await r3.json();
       _orphanFeatures = (gj3.features || []).map(f => {
@@ -2007,7 +2041,16 @@ function initRealtime() {
 function initMapEvents() {
   map.on('click', e => {
     if (!placingMode) return;
-    if (map.queryRenderedFeatures(e.point, { layers:['survey-dots'] }).length) return;
+    // I5 fix: exclude the orphan (survey-only) layers too, not just
+    // survey-dots — otherwise tapping the halo/dot under an orphan marker
+    // while placing a new pin fell through to this global handler and
+    // opened the bottom sheet on top of (or instead of) the orphan popup.
+    // orphan-iaq-halo/-dots are only added lazily once orphan data loads
+    // (addOrphanIAQLayer), so filter to layers that actually exist —
+    // querying a layer id the style doesn't have throws in MapLibre.
+    const excludeLayers = ['survey-dots', 'orphan-iaq-halo', 'orphan-iaq-dots']
+      .filter(id => map.getLayer(id));
+    if (map.queryRenderedFeatures(e.point, { layers: excludeLayers }).length) return;
     exitPlaceMode();
     openBottomSheet(e.lngLat);
   });
@@ -2063,7 +2106,10 @@ function openBottomSheet(lngLat) {
   // (survey-only, no canvass record) parcel — e.g. tapping the 6409
   // parcel auto-fills "6409 BELOIT Ave" instead of leaving the surveyor
   // to hunt it up manually. Left blank (and never overwritten below)
-  // when there's no orphan nearby.
+  // when there's no orphan nearby. This is the NEW-point (add) path, so
+  // the field is shown here — I4 fix hides it only in edit mode.
+  const addressFieldEl = document.getElementById('bs-address-field');
+  if (addressFieldEl) addressFieldEl.style.display = '';
   const addressEl = document.getElementById('bs-address');
   if (addressEl) {
     const prefill = _nearestOrphanAddress(lngLat.lat, lngLat.lng);
@@ -2157,11 +2203,18 @@ function openEditSheet(id) {
   // Notes
   document.getElementById('bs-notes').value = pt.notes || '';
 
-  // Address — editing an existing pin doesn't touch its stored address
-  // (only add-point does), so just show what's on file, if anything.
+  // Address (I4 fix, 2026-08-10): editing an existing pin does NOT persist
+  // this field — no load query selects `address` back off
+  // field_survey_points, and savePoint()'s edit-mode branch never wrote it.
+  // Previously this showed an editable input `pt.address` (always
+  // undefined) into, letting a surveyor type an address, see a success
+  // toast, and have nothing saved. Hide the whole field in edit mode
+  // instead of shipping a control that silently no-ops.
+  const addressFieldEl = document.getElementById('bs-address-field');
+  if (addressFieldEl) addressFieldEl.style.display = 'none';
   const addressEl = document.getElementById('bs-address');
   if (addressEl) {
-    addressEl.value = pt.address || '';
+    addressEl.value = '';
     addressEl.classList.remove('prefilled');
   }
 
@@ -2486,10 +2539,18 @@ async function savePoint(coords) {
     let insertedId = null;
     let insertFailed = false;
     try {
-      const { data } = await _insertFieldPointRow({
+      // C1 fix: supabase-js v2 RESOLVES with { data, error } on a PostgREST
+      // failure — it does not throw. Reading only `data` here let a failed
+      // insert (e.g. RLS rejection, transient PostgREST error) look like a
+      // success: insertFailed stayed false, a fake local id was drawn on
+      // the map, and the row was never written. Explicitly checking
+      // `error` and re-throwing routes it into the same catch/queue path
+      // used for thrown exceptions, matching the sync path at ~3175.
+      const { data, error } = await _insertFieldPointRow({
         lat: newPt.lat, lon: newPt.lon, status, notes, address,
         collector_id: collectorId, collector_name: currentUser?.name,
       });
+      if (error) throw error;
       if (data) {
         locallyAdded.add(data.id);
         insertedId = data.id;
