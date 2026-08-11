@@ -6,6 +6,8 @@ Two access levels (mirrors the iaq-points / survey-points pattern):
 
 ?filter=today  limit to today's collected entries.
 """
+from __future__ import annotations
+
 from http.server import BaseHTTPRequestHandler
 from datetime import date
 from urllib.parse import urlparse, parse_qs
@@ -15,6 +17,8 @@ sys.path.append(str(pathlib.Path(__file__).parent))
 from _lib import load_cached, json_response, empty_geojson, _bearer_jwt
 
 
+# Single source of truth: both the top-level strip and the nested
+# `coincident_contacts` strip (see _strip_pii below) key off this set.
 _PII_FIELDS = {
     'notes', 'status_detail', 'second_attempt',
     # Residential address fields are PII for non-team callers.
@@ -22,11 +26,35 @@ _PII_FIELDS = {
 }
 
 
+def _strip_contact_entry(entry):
+    """Strip `_PII_FIELDS` keys from one `coincident_contacts` entry.
+
+    Defensive about shape: dedup_contacts_at_parcel (api/_processing.py)
+    always stamps dicts here, but this endpoint must never 500, so any
+    non-dict junk is passed through unchanged rather than raising.
+    """
+    if not isinstance(entry, dict):
+        return entry
+    return {k: v for k, v in entry.items() if k not in _PII_FIELDS}
+
+
 def _strip_pii(geojson: dict) -> dict:
+    """Return a copy of the GeoJSON with PII fields removed from properties.
+
+    Recurses into `properties.coincident_contacts` — dedup_contacts_at_parcel
+    stamps collapsed households' address/matched_address/street_name/notes
+    onto each entry there, and those keys are PII exactly like their
+    top-level counterparts. `coincident_contacts` may be absent, null, an
+    empty list, or (defensively) contain non-dict junk; all pass through
+    without raising.
+    """
     features = []
     for f in geojson.get('features', []):
         props = {k: v for k, v in (f.get('properties') or {}).items()
                  if k not in _PII_FIELDS}
+        coincident = props.get('coincident_contacts')
+        if isinstance(coincident, list):
+            props['coincident_contacts'] = [_strip_contact_entry(e) for e in coincident]
         features.append({**f, 'properties': props})
     return {**geojson, 'features': features}
 
