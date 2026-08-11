@@ -40,6 +40,13 @@ _STATUS_COLORS = {
 }
 LOCAL_TZ = ZoneInfo("America/New_York")
 
+# I7 fix (2026-08-10): tolerate migration 27 (the optional `address` column
+# on field_survey_points) not being applied yet, same pattern as
+# api/upload.py's _FIELD_COLS_BASE / _FIELD_COLS_ENRICHED. Try the enriched
+# select first; the caller falls back to the base columns on ANY exception.
+_FIELD_COLS_BASE     = "id, lat, lon, status, notes, collector_id, collector_name, collected_at"
+_FIELD_COLS_ENRICHED = _FIELD_COLS_BASE + ", address"
+
 
 def _compute_analysis(features: list) -> dict:
     """Minimal contact-level analysis — same output shape as compute_contact_analysis()
@@ -179,10 +186,17 @@ def _persist_integrity_metrics(sb, iaq_feats: list, features: list) -> dict | No
 
 
 def _field_row_to_feature(row: dict) -> dict | None:
-    # NB: field_survey_points carries no address column — surveyors mark the
-    # GPS point and add notes only. We deliberately do not surface any
-    # address-like field here so a future SELECT extension can't leak PII
-    # into the public dashboard blob.
+    # NB (updated 2026-08-10, I7 fix): field_survey_points now carries an
+    # OPTIONAL `address` column (migration 27) that a surveyor may fill in
+    # at pin-placement time. This comment used to claim we "deliberately do
+    # not surface any address-like field here" — that was true before
+    # migration 27 existed, but is now false and contradicted api/upload.py:
+    # _field_row_to_feature, which already surfaces `address`. Without this,
+    # a surveyor's typed address only ever reached the map via a manual
+    # community-contact upload (api/upload.py), never via the 4x/day cron
+    # this function backs. `row.get("address")` is safe even against the
+    # base (pre-migration-27) select in _run_refresh, which never includes
+    # the key at all — it simply returns None.
     lon = row.get("lon")
     lat = row.get("lat")
     if lon is None or lat is None:
@@ -199,6 +213,7 @@ def _field_row_to_feature(row: dict) -> dict | None:
             "collector": row.get("collector_name"),
             "collector_id": row.get("collector_id"),
             "collected_at": row.get("collected_at"),
+            "address": row.get("address") or None,
         },
     }
 
@@ -229,14 +244,28 @@ def _run_refresh() -> dict:
         PAGE = 1000
         HARD_CAP = 100_000
         offset = 0
+        # I7 fix: try the enriched (+address) select first; tolerate
+        # migration 27 not being applied yet by falling back to the base
+        # columns on ANY exception, once, at the first page — mirrors
+        # api/upload.py's _load_all_field_features fallback pattern.
+        cols = _FIELD_COLS_ENRICHED
         while offset < HARD_CAP:
-            page = (
-                sb.table("field_survey_points")
-                .select("id, lat, lon, status, notes, collector_id, collector_name, collected_at")
-                .gt("collected_at", last_at)
-                .range(offset, offset + PAGE - 1)
-                .execute()
-            ).data or []
+            try:
+                page = (
+                    sb.table("field_survey_points")
+                    .select(cols)
+                    .gt("collected_at", last_at)
+                    .range(offset, offset + PAGE - 1)
+                    .execute()
+                ).data or []
+            except Exception as e:
+                if cols is _FIELD_COLS_ENRICHED:
+                    print(f"[daily-refresh] field_survey_points select with address "
+                          f"failed ({type(e).__name__}: {e}) — retrying without it "
+                          f"(migration 27 not applied?)")
+                    cols = _FIELD_COLS_BASE
+                    continue
+                raise
             if not page:
                 break
             new_rows.extend(page)
