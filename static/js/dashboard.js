@@ -96,7 +96,7 @@ function iaqUnmatched(data) {
   return { ...data, features: data.features.filter(f => !f.properties.iaq_matched) };
 }
 
-// Must match FALLBACK_ADDRESS in api/unmatched-iaq.py — the parcel address
+// Must match FALLBACK_ADDRESS in api/iaq-points.py — the parcel address
 // index blob hasn't been published to production yet, so every orphan
 // currently comes back with this exact string. Never present that literal
 // text as if it were a real street address in the popup header.
@@ -106,7 +106,7 @@ function _orphanAddressLabel(p) {
   return p.street_name ? `${p.street_name} (address pending)` : 'address pending';
 }
 
-// Merge `parcel_address` (+ an `orphan` flag) from /api/unmatched-iaq onto
+// Merge `parcel_address` (+ an `orphan` flag) from /api/iaq-points?unmatched=1 onto
 // the matching iaqData feature by response_id. Orphans are households that
 // answered Qualtrics but have no canvass record — without this merge a
 // G3 marker carries no address context, and (see _backfillIaqMatchStatus
@@ -117,7 +117,7 @@ async function _mergeOrphanAddresses(featureCollection) {
   const feats = featureCollection?.features;
   if (!Array.isArray(feats) || !feats.length) return;
   try {
-    const res = await fetch('/api/unmatched-iaq');
+    const res = await fetch('/api/iaq-points?unmatched=1');
     if (!res.ok) return;
     const gj = await res.json();
     const orphans = gj?.features || [];
