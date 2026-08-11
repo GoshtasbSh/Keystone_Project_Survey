@@ -96,6 +96,51 @@ function iaqUnmatched(data) {
   return { ...data, features: data.features.filter(f => !f.properties.iaq_matched) };
 }
 
+// Must match FALLBACK_ADDRESS in api/unmatched-iaq.py — the parcel address
+// index blob hasn't been published to production yet, so every orphan
+// currently comes back with this exact string. Never present that literal
+// text as if it were a real street address in the popup header.
+const ORPHAN_FALLBACK_ADDR = 'Address not on file';
+function _orphanAddressLabel(p) {
+  if (p.parcel_address && p.parcel_address !== ORPHAN_FALLBACK_ADDR) return p.parcel_address;
+  return p.street_name ? `${p.street_name} (address pending)` : 'address pending';
+}
+
+// Merge `parcel_address` (+ an `orphan` flag) from /api/unmatched-iaq onto
+// the matching iaqData feature by response_id. Orphans are households that
+// answered Qualtrics but have no canvass record — without this merge a
+// G3 marker carries no address context, and (see _backfillIaqMatchStatus
+// below) a nameless field pin landing on the same parcel can silently
+// steal the orphan's purple "needs attention" styling, which is exactly
+// what happened at 6409 Beloit on 2026-07-21. Read-only GET; never writes.
+async function _mergeOrphanAddresses(featureCollection) {
+  const feats = featureCollection?.features;
+  if (!Array.isArray(feats) || !feats.length) return;
+  try {
+    const res = await fetch('/api/unmatched-iaq');
+    if (!res.ok) return;
+    const gj = await res.json();
+    const orphans = gj?.features || [];
+    if (!orphans.length) return;
+    const byResponseId = new Map();
+    for (const of_ of orphans) {
+      const rid = String(of_?.properties?.response_id || '').trim();
+      if (rid) byResponseId.set(rid, of_.properties);
+    }
+    for (const f of feats) {
+      const p = f.properties || (f.properties = {});
+      const rid = String(p.response_id || '').trim();
+      const op = rid && byResponseId.get(rid);
+      if (op) {
+        p.parcel_address = op.parcel_address;
+        p.orphan = true;
+      }
+    }
+  } catch (e) {
+    console.warn('Load orphan addresses failed:', e);
+  }
+}
+
 // ── Map init ────────────────────────────────────────────────────────────────
 function initMap() {
   const bm = BASEMAPS[currentBasemap];
@@ -213,6 +258,9 @@ async function loadData() {
     parcelsData  = await _safeJson(parRes,    EMPTY_GJ);
     analysisData = await _safeJson(anaRes,    {});
     iaqData      = await _safeJson(iaqPtsRes, EMPTY_GJ);
+    // Attach parcel_address + orphan flag before backfilling match_status —
+    // the backfill below needs p.orphan to decide G1 vs G3.
+    await _mergeOrphanAddresses(iaqData);
     // Backfill match_status on any feature that came from a pre-v3
     // upload (no server-side tagger had run yet). This makes the new
     // stroke encoding work without forcing a re-upload.
@@ -295,6 +343,7 @@ async function refreshAllData() {
     parcelsData   = await safe(parRes, EMPTY_GJ);
     analysisData  = await safe(anaRes, {});
     iaqData       = await safe(iaqPtsRes, EMPTY_GJ);
+    await _mergeOrphanAddresses(iaqData);
     _backfillContactMatchStatus(surveyData);
     _backfillIaqMatchStatus(iaqData);
     const iaqAna  = await safe(iaqAnaRes, {});
@@ -1209,7 +1258,15 @@ function _backfillIaqMatchStatus(featureCollection) {
   if (!Array.isArray(feats)) return;
   for (const f of feats) {
     const p = f.properties || (f.properties = {});
-    p.match_status = p.iaq_matched ? 'matched' : 'iaq_only';
+    // An orphan (server-confirmed: answered Qualtrics, no addressed
+    // canvass record — see api/survey_logic.py orphan_iaq_features) must
+    // keep the G3 purple "needs attention" treatment even when
+    // iaq_matched is true. iaq_matched can go true purely because a
+    // nameless field pin happened to land on the same parcel — that
+    // silently cleared the purple marker for 6409 Beloit on 2026-07-21
+    // and removed the household from the manual-fix worklist without
+    // ever recording its address.
+    p.match_status = (p.iaq_matched && !p.orphan) ? 'matched' : 'iaq_only';
   }
 }
 
@@ -2914,6 +2971,7 @@ async function restoreVersion(id, label, type) {
     } else {
       const iaqPts = await (await fetchIaqPoints()).json();
       iaqData = iaqPts;
+      await _mergeOrphanAddresses(iaqData);
       _backfillIaqMatchStatus(iaqData);
       const iaqAna = await (await _authFetch('/api/analysis?type=iaq')).json();
       if (iaqAna.loaded) iaqAnalysis = iaqAna;
@@ -4115,8 +4173,17 @@ function onIAQPointClick(e) {
 function _buildIaqSummaryTab(p) {
   const rc = p.color || '#9ca3af';
   const colorSafe = /^#[0-9a-fA-F]{3,8}$/.test(String(rc)) ? rc : '#9ca3af';
+  // parcel_address only ever lands here via _mergeOrphanAddresses, so its
+  // presence is itself the orphan signal for display purposes. Never show
+  // the server's literal "Address not on file" fallback as if it were a
+  // real address — fall back to the coarse, already-public street_name.
+  const orphanHdr = p.parcel_address
+    ? `<div class="iaq-orphan-hdr">SURVEY ONLY — ${escapeHtml(_orphanAddressLabel(p))}
+         <div class="iaq-orphan-sub">No canvass record for this address.</div></div>`
+    : '';
   return `
     <div class="popup-body">
+      ${orphanHdr}
       <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
         <span class="popup-badge" style="background:${colorSafe}22;color:${colorSafe};border:1px solid ${colorSafe}44">${escapeHtml(p.risk_tier || '—')} Risk</span>
         <span class="popup-badge" style="background:rgba(255,255,255,.05);color:var(--text2);border:1px solid var(--border)">Overall: ${Number(p.overall_risk) || 0}/100</span>
