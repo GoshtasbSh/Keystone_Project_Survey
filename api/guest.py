@@ -21,6 +21,8 @@ Single Vercel function — all action dispatch happens via the body's
 Auth: NONE for `claim` (guests have no Supabase account).
       Validated session_id for everything else.
 """
+from __future__ import annotations
+
 from http.server import BaseHTTPRequestHandler
 from datetime import datetime, timezone, timedelta
 import hashlib
@@ -47,6 +49,33 @@ ALLOWED_STATUS = {
 
 
 # ── helpers (inlined from former api/guest/_helpers.py) ────────────────
+
+def _insert_field_point_row(sb, base_fields: dict, address):
+    """Insert a field_survey_points row, tolerating migration 27 (the
+    optional `address` column) not having been applied yet.
+
+    Mirrors api/upload.py's `_insert_version_row`: try the enriched
+    insert (base_fields + address) first when an address was given;
+    PostgREST rejects an insert that references a column the live
+    schema doesn't have, so on ANY exception we retry with `base_fields`
+    only. A guest's point save must never fail purely because migration
+    27 hasn't been run yet.
+
+    Returns the inserted row dict (or None if the insert returned no
+    rows). Raises only if BOTH the enriched insert (when attempted) and
+    the base-only insert fail — the caller turns that into a 500.
+    """
+    if address:
+        try:
+            r = sb.table("field_survey_points").insert({**base_fields, "address": address}).execute()
+            return (r.data or [None])[0]
+        except Exception as e:
+            print(f"[guest/add-point] enriched insert (with address) failed "
+                  f"({type(e).__name__}: {e}) — retrying without address "
+                  f"(migration 27 not applied?)")
+    r = sb.table("field_survey_points").insert(base_fields).execute()
+    return (r.data or [None])[0]
+
 
 def _get_client_ip(self) -> str:
     # On Vercel, X-Vercel-Forwarded-For is set by the platform and cannot
@@ -361,18 +390,21 @@ class handler(BaseHTTPRequestHandler):
         notes = (body.get("notes") or "").strip()
         if len(notes) > 1000:
             notes = notes[:1000]
+        address = (body.get("address") or "").strip()
+        if len(address) > 300:
+            address = address[:300]
+        base_fields = {
+            "lat":              lat,
+            "lon":              lon,
+            "status":           status,
+            "notes":            notes or None,
+            "collector_id":     None,
+            "collector_name":   sess["name"],
+            "guest_session_id": sess["id"],
+            "is_offline":       bool(body.get("is_offline")),
+        }
         try:
-            r = (sb.table("field_survey_points").insert({
-                "lat":              lat,
-                "lon":              lon,
-                "status":           status,
-                "notes":            notes or None,
-                "collector_id":     None,
-                "collector_name":   sess["name"],
-                "guest_session_id": sess["id"],
-                "is_offline":       bool(body.get("is_offline")),
-            }).execute())
-            row = (r.data or [None])[0]
+            row = _insert_field_point_row(sb, base_fields, address or None)
         except Exception as e:
             print(f"[guest/add-point] insert FAIL {type(e).__name__}: {e}")
             json_response(self, 500, {"ok": False, "error": "Could not save point."})

@@ -524,6 +524,15 @@ button{cursor:pointer;font-family:'Inter',system-ui,sans-serif;border:none;backg
 }
 .bs-notes:focus{border-color:var(--accent);}
 .bs-notes::placeholder{color:var(--muted);}
+.bs-input{
+  width:100%;height:40px;
+  background:var(--card-2);border:1px solid var(--border);border-radius:10px;
+  padding:0 12px;color:var(--text);font-family:'Inter',sans-serif;font-size:13px;
+  outline:none;transition:border-color .15s;
+}
+.bs-input:focus{border-color:var(--accent);}
+.bs-input::placeholder{color:var(--muted);}
+.bs-input.prefilled{border-color:#8b5cf6;}
 .bs-meta{display:flex;gap:6px;margin-top:10px;}
 .bs-meta-chip{
   background:var(--card-2);border:1px solid var(--border);
@@ -1209,6 +1218,8 @@ button{cursor:pointer;font-family:'Inter',system-ui,sans-serif;border:none;backg
       <button class="bs-chip" onclick="appendNote('Dog on property')">Dog on property</button>
       <button class="bs-chip" onclick="appendNote('QR on door')">QR on door</button>
     </div>
+    <div class="bs-section-lbl">Address <span style="font-weight:400;opacity:.6;text-transform:none;letter-spacing:0">if known</span></div>
+    <input type="text" class="bs-input" id="bs-address" placeholder="e.g. 6409 Beloit Ave" autocomplete="off" maxlength="300">
     <div class="bs-section-lbl">Notes <span style="font-weight:400;opacity:.6;text-transform:none;letter-spacing:0">optional</span></div>
     <textarea class="bs-notes" id="bs-notes" placeholder='e.g. "Gate locked, return Thu PM"' rows="2"></textarea>
     <div class="bs-meta">
@@ -1751,6 +1762,54 @@ function _orphanLabel(p) {
   if (p.parcel_address && p.parcel_address !== ORPHAN_FALLBACK_ADDR) return p.parcel_address;
   return p.street_name ? `${p.street_name} (address pending)` : 'Address pending';
 }
+
+// Haversine distance in meters — used only to prefill the optional
+// address field when a new point lands on an orphan (survey-only)
+// parcel. Mirrors ORPHAN_RADIUS_M in api/survey_logic.py.
+const ADDRESS_PREFILL_RADIUS_M = 25;
+function _haversineM(lat1, lon1, lat2, lon2) {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+// Nearest orphan (survey-only, no canvass record) parcel address within
+// ADDRESS_PREFILL_RADIUS_M of a tapped point — e.g. tapping the 6409
+// parcel auto-fills "6409 BELOIT Ave" into the new point's address field.
+// Only returns a REAL address (never the "Address not on file" fallback
+// string, which is not data).
+function _nearestOrphanAddress(lat, lon) {
+  let best = null, bestDist = Infinity;
+  for (const f of _orphanFeatures) {
+    const p = f.properties || {};
+    if (!p.parcel_address || p.parcel_address === ORPHAN_FALLBACK_ADDR) continue;
+    const c = (f.geometry && f.geometry.coordinates) || [];
+    if (c[0] == null || c[1] == null) continue;
+    const d = _haversineM(lat, lon, c[1], c[0]);
+    if (d <= ADDRESS_PREFILL_RADIUS_M && d < bestDist) { bestDist = d; best = p.parcel_address; }
+  }
+  return best;
+}
+
+// Insert a field_survey_points row, tolerating migration 27 (the optional
+// `address` column) not having been applied to production yet. Tries the
+// enriched insert first when an address was given; on ANY failure retries
+// with the base fields only, so a member's pin save never fails just
+// because that column is missing. Mirrors the fallback shape used
+// server-side in api/upload.py's _insert_version_row and
+// api/guest.py's _insert_field_point_row.
+async function _insertFieldPointRow(fields) {
+  const { address, ...base } = fields;
+  if (address) {
+    try {
+      return await sb.from('field_survey_points').insert({ ...base, address }).select('id').single();
+    } catch (err) {
+      console.warn('[field-point] insert with address failed, retrying without it:', err);
+    }
+  }
+  return await sb.from('field_survey_points').insert(base).select('id').single();
+}
 function updateOrphanBadge(n) {
   const b = document.getElementById('orphan-badge');
   if (b) b.textContent = String(n);
@@ -2000,6 +2059,18 @@ function openBottomSheet(lngLat) {
   document.getElementById('bs-collector').textContent = currentUser ? currentUser.name.split(' ')[0] : 'You';
   document.getElementById('bs-notes').value = '';
 
+  // Prefill the optional address field when this tap lands on an orphan
+  // (survey-only, no canvass record) parcel — e.g. tapping the 6409
+  // parcel auto-fills "6409 BELOIT Ave" instead of leaving the surveyor
+  // to hunt it up manually. Left blank (and never overwritten below)
+  // when there's no orphan nearby.
+  const addressEl = document.getElementById('bs-address');
+  if (addressEl) {
+    const prefill = _nearestOrphanAddress(lngLat.lat, lngLat.lng);
+    addressEl.value = prefill || '';
+    addressEl.classList.toggle('prefilled', !!prefill);
+  }
+
   const addrEl = document.getElementById('bs-addr');
   addrEl.textContent = 'Finding address…';
   addrEl.classList.add('loading');
@@ -2085,6 +2156,14 @@ function openEditSheet(id) {
 
   // Notes
   document.getElementById('bs-notes').value = pt.notes || '';
+
+  // Address — editing an existing pin doesn't touch its stored address
+  // (only add-point does), so just show what's on file, if anything.
+  const addressEl = document.getElementById('bs-address');
+  if (addressEl) {
+    addressEl.value = pt.address || '';
+    addressEl.classList.remove('prefilled');
+  }
 
   // Save button
   const saveBtn = document.getElementById('bs-save');
@@ -2318,8 +2397,13 @@ async function savePoint(coords) {
   }
   // ── END EDIT MODE ─────────────────────────────────────────────────────
 
+  // Optional address (Task 13) — either typed by the surveyor or
+  // prefilled from a nearby orphan parcel by openBottomSheet(). Only
+  // set on NEW points; editing an existing pin never touches it.
+  const address = (document.getElementById('bs-address')?.value || '').trim() || null;
+
   const newPt = {
-    lat: coords[1], lon: coords[0], status, notes,
+    lat: coords[1], lon: coords[0], status, notes, address,
     collector_name: currentUser?.name || 'Surveyor',
     collected_at: new Date().toISOString(),
     color,
@@ -2346,7 +2430,7 @@ async function savePoint(coords) {
             action: 'add-point',
             session_id: GUEST.session_id,
             lat: newPt.lat, lon: newPt.lon,
-            status, notes,
+            status, notes, address,
           }),
         });
         if (r.status === 401) { handleGuestExpired(); return; }
@@ -2402,10 +2486,10 @@ async function savePoint(coords) {
     let insertedId = null;
     let insertFailed = false;
     try {
-      const { data } = await sb.from('field_survey_points').insert({
-        lat: newPt.lat, lon: newPt.lon, status, notes,
+      const { data } = await _insertFieldPointRow({
+        lat: newPt.lat, lon: newPt.lon, status, notes, address,
         collector_id: collectorId, collector_name: currentUser?.name,
-      }).select('id').single();
+      });
       if (data) {
         locallyAdded.add(data.id);
         insertedId = data.id;
@@ -2985,7 +3069,7 @@ async function syncQueueGuest() {
     const guestBody = (() => {
       if (op === 'edit')   return { action: 'edit-point',   session_id: GUEST.session_id, point_id: p.id, status: p.status, notes: p.notes };
       if (op === 'delete') return { action: 'delete-point', session_id: GUEST.session_id, point_id: p.id };
-      return { action: 'add-point', session_id: GUEST.session_id, lat: p.lat, lon: p.lon, status: p.status, notes: p.notes, is_offline: true };
+      return { action: 'add-point', session_id: GUEST.session_id, lat: p.lat, lon: p.lon, status: p.status, notes: p.notes, address: p.address, is_offline: true };
     })();
     while (attempt < 3 && !success) {
       try {
@@ -3068,10 +3152,10 @@ async function syncQueue() {
           if (error) throw error;
         } else {
           // add (default for legacy queue rows without an op field)
-          const { data, error } = await sb.from('field_survey_points').insert({
-            lat: p.lat, lon: p.lon, status: p.status, notes: p.notes,
+          const { data, error } = await _insertFieldPointRow({
+            lat: p.lat, lon: p.lon, status: p.status, notes: p.notes, address: p.address,
             collector_id: insertCollector, collector_name: p.collector_name,
-          }).select('id').single();
+          });
           if (error) throw error;
           if (data) {
             locallyAdded.add(data.id);

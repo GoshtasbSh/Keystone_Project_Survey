@@ -94,23 +94,51 @@ def _field_row_to_feature(row: dict):
             'collector': row.get('collector_name'),
             'collector_id': row.get('collector_id'),
             'collected_at': row.get('collected_at'),
+            # Migration 27 (optional field-pin address). row.get() is safe
+            # even on the base (pre-migration) select below, which never
+            # includes the key at all.
+            'address': row.get('address') or None,
         },
     }
 
 
+_FIELD_COLS_BASE     = 'id, lat, lon, status, notes, collector_id, collector_name, collected_at'
+_FIELD_COLS_ENRICHED = _FIELD_COLS_BASE + ', address'
+
+
 def _load_all_field_features(sb) -> list:
+    """Load every field_survey_points row as GeoJSON features.
+
+    Tries the migration-27 `address` column first so a saved field-pin
+    address surfaces on the dashboard popup; on ANY exception (PostgREST
+    rejects a SELECT that references a column the live schema doesn't
+    have — migration 27 not applied yet) falls back to the base column
+    set, mirroring `_insert_version_row`'s enriched-then-fallback
+    pattern. Falling back happens once, at the first page, so a genuine
+    unrelated failure on a later page still raises normally.
+    """
     rows: list = []
     page = 1000
     hard_cap = 100_000
     offset = 0
+    cols = _FIELD_COLS_ENRICHED
     while offset < hard_cap:
-        batch = (
-            sb.table('field_survey_points')
-            .select('id, lat, lon, status, notes, collector_id, collector_name, collected_at')
-            .range(offset, offset + page - 1)
-            .execute()
-            .data
-        ) or []
+        try:
+            batch = (
+                sb.table('field_survey_points')
+                .select(cols)
+                .range(offset, offset + page - 1)
+                .execute()
+                .data
+            ) or []
+        except Exception as e:
+            if cols is _FIELD_COLS_ENRICHED:
+                print(f"[upload/survey] field_survey_points select with address failed "
+                      f"({type(e).__name__}: {e}) — retrying without it "
+                      f"(migration 27 not applied?)")
+                cols = _FIELD_COLS_BASE
+                continue
+            raise
         if not batch:
             break
         rows.extend(batch)
