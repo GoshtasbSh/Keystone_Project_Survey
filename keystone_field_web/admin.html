@@ -995,6 +995,23 @@ async function handleUploadWithFile(type, file) {
   if (!sb) return;
   if (_uploading) { showResult(type, 'err', '✗ Another upload is in progress — please wait'); return; }
   _uploading = true;
+
+  // I3 fix (2026-08-10): "force replace" bypasses the upload safety guard
+  // (evaluate_iaq_upload_safety) and can delete stored survey responses —
+  // it must be single-use, not sticky. Capture the checkbox's value
+  // synchronously, BEFORE the `await` below, then immediately clear the
+  // checkbox. Capturing into a local var (rather than re-reading the
+  // checkbox after the await) also means a second file selected while this
+  // one is still processing can't race the reset and steal/lose the flag.
+  // Resetting unconditionally here — not only after a successful upload —
+  // is deliberate: a destructive safety-bypass must never silently survive
+  // past the one upload it was checked for, including on a failed/blocked
+  // upload, where leaving it checked would silently re-arm force-replace
+  // for whatever the admin uploads next.
+  const forceEl = type === 'iaq' ? document.getElementById('force-iaq') : null;
+  const forceChecked = !!(forceEl && forceEl.checked);
+  if (forceEl) forceEl.checked = false;
+
   // Disable file inputs so the user cannot drop/select a second file while
   // the first is being processed on the server.
   document.querySelectorAll('.upload-zone input[type=file]').forEach(el => { el.disabled = true; });
@@ -1020,10 +1037,7 @@ async function handleUploadWithFile(type, file) {
     if (!session) { window.location.replace('/login'); return; }
 
     let endpoint = type === 'community' ? '/api/upload?type=survey' : '/api/upload?type=iaq';
-    if (type === 'iaq') {
-      const forceEl = document.getElementById('force-iaq');
-      if (forceEl && forceEl.checked) endpoint += '&force=1';
-    }
+    if (forceChecked) endpoint += '&force=1';
     const fd = new FormData();
     fd.append('file', file, file.name);
 
