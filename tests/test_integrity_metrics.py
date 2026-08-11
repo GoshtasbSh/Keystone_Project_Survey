@@ -4,7 +4,7 @@ Covers `_compute_integrity_metrics` (pure), `_table_row_count`, and
 `_persist_integrity_metrics` in api/daily-refresh.py. Confirms:
 
   - the metrics row reuses `orphan_iaq_features` (single source of truth
-    shared with /api/unmatched-iaq and the mobile "Already Responded"
+    shared with /api/iaq-points?unmatched=1 and the mobile "Already Responded"
     list) rather than re-deriving orphan logic
   - n_contacts / n_field_points split correctly on `source == 'field'`
   - the write goes ONLY to a NEW data_type='integrity_metrics' row —

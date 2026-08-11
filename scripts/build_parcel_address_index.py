@@ -11,7 +11,7 @@ updates or deletes community_contact, iaq_survey or analysis.
 
 The point-in-polygon ray-cast and index-entry shape live in
 api/survey_logic.py (build_parcel_address_entries / lookup_parcel) — the
-single source of truth shared with api/unmatched-iaq.py, so a geometry fix
+single source of truth shared with api/iaq-points.py (?unmatched=1), so a geometry fix
 (e.g. honouring interior-ring holes) only has to be made once. This script
 imports from api/ (not the other way around).
 

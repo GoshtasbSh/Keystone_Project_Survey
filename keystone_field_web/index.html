@@ -2561,7 +2561,7 @@ async function savePoint(coords) {
       insertFailed = true;
       queuePush({ ...newPt, coords, collector_id: collectorId });
     }
-    const finalId = insertedId || ('l' + Date.now());
+    const finalId = insertedId || ((insertFailed ? 'q' : 'l') + Date.now());
     _allFieldPoints.unshift({ ...newPt, id: finalId, collector_id: collectorId });
     appendPointToMap({ ...newPt, id: finalId, collector_id: collectorId });
     // Honest toast: tell the user the truth about whether it was saved or queued.

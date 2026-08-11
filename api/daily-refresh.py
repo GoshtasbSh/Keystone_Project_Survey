@@ -103,7 +103,7 @@ def _refresh_iaq_match_status(iaq_features: list) -> None:
 def _compute_integrity_metrics(iaq_feats: list, features: list,
                                 contacts_table_rows: int) -> dict:
     """Pure computation — no I/O. Reuses `orphan_iaq_features` from
-    api/survey_logic.py (the same source of truth as /api/unmatched-iaq
+    api/survey_logic.py (the same source of truth as /api/iaq-points?unmatched=1
     and the mobile 'Already Responded' list) so the orphan count here can
     never drift from what surveyors actually see.
     """

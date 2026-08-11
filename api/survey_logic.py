@@ -204,7 +204,7 @@ def orphan_iaq_features(iaq_features: list, contact_features: list,
 # ── Shared parcel address-index geometry (single source of truth) ─────────
 #
 # Fix 2026-08-10 round 1: this ray-cast used to be duplicated in
-# scripts/build_parcel_address_index.py AND api/unmatched-iaq.py, and both
+# scripts/build_parcel_address_index.py AND api/iaq-points.py (?unmatched=1), and both
 # copies only tested the outer ring — a point inside an interior ring
 # (a hole, e.g. a courtyard or an easement cut out of a parcel) was wrongly
 # reported as inside that parcel and handed that parcel's street address to
