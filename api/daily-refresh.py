@@ -7,6 +7,8 @@ local admin via scripts/ingest.py when new parcel or contact data arrives.
 
 Protected by CRON_SECRET header when called from Vercel's scheduler.
 """
+from __future__ import annotations
+
 from http.server import BaseHTTPRequestHandler
 from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs
@@ -66,6 +68,28 @@ def _compute_analysis(features: list) -> dict:
         ],
         "parcel_stats": {},
     }
+
+
+def _refresh_iaq_match_status(iaq_features: list) -> None:
+    """Re-derive `match_status` on every IAQ feature from `iaq_matched`,
+    mirroring api/_processing.py's upload-time tagging
+    (`'matched' if iaq_matched else 'iaq_only'`). Mutates in place.
+
+    Task 15: the field-point match pass above can flip `iaq_matched`
+    true on an IAQ feature that was uploaded (and tagged) before any
+    field pin existed for its parcel. Its stored `match_status` then
+    goes stale at 'iaq_only' even though `iaq_matched` is now true —
+    only the browser's client-side backfill (_backfillIaqMatchStatus in
+    static/js/dashboard.js) ever corrected this, so the raw stored blob
+    (and anything reading it directly, e.g. a CSV export) kept reading
+    the wrong value. Re-deriving here keeps the server's stored value
+    in sync with the field it's derived from.
+    """
+    for f in iaq_features or []:
+        props = (f or {}).get("properties")
+        if props is None:
+            continue
+        props["match_status"] = "matched" if props.get("iaq_matched") else "iaq_only"
 
 
 def _field_row_to_feature(row: dict) -> dict | None:
@@ -228,6 +252,11 @@ def _run_refresh() -> dict:
     iaq_blob_changed = (iaq_matched_before != iaq_matched_after)
     if iaq_blob_changed and iaq_stored:
         try:
+            # Task 15: keep the stored match_status in sync with
+            # iaq_matched before writing — this blob is about to be
+            # persisted anyway (iaq_blob_changed), so this adds no new
+            # write, it just corrects what the existing write contains.
+            _refresh_iaq_match_status(iaq_feats)
             iaq_payload = dict(iaq_stored)
             geo = dict(iaq_payload.get("geojson") or {})
             geo["features"] = iaq_feats
