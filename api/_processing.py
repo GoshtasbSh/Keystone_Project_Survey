@@ -1289,7 +1289,16 @@ def dedup_contacts_at_parcel(features: list, cell_deg: float = 1e-5) -> list:
                         if lp.get(k) is not None and wp.get(k) is None:
                             wp[k] = lp[k]
                     break
+        # Task 12 fix: the loser's own address used to be discarded here —
+        # 53 rows collapsed in production with no way to recover which
+        # address the loser actually came from, and 6 of those turned out
+        # to be a DIFFERENT street than the survivor (a real dedup error,
+        # not a duplicate). `address` preserves the loser's own address,
+        # `matched_address` records which survivor address it was folded
+        # into, and `street_mismatch` flags the cross-street case so it
+        # can be surfaced/reviewed instead of silently disappearing.
         existing = wp.get("coincident_contacts") or []
+        winner_street = wp.get("street_name")
         wp["coincident_contacts"] = existing + [
             {
                 "status":       (l.get("properties") or {}).get("status"),
@@ -1298,6 +1307,13 @@ def dedup_contacts_at_parcel(features: list, cell_deg: float = 1e-5) -> list:
                 "collected_at": (l.get("properties") or {}).get("collected_at"),
                 "source":       (l.get("properties") or {}).get("source"),
                 "has_iaq_survey": bool((l.get("properties") or {}).get("has_iaq_survey")),
+                "address":         (l.get("properties") or {}).get("address"),
+                "matched_address": wp.get("address"),
+                "street_mismatch": bool(
+                    (l.get("properties") or {}).get("street_name")
+                    and winner_street
+                    and (l.get("properties") or {}).get("street_name") != winner_street
+                ),
             }
             for l in losers
         ]
