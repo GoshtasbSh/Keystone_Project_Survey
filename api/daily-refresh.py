@@ -92,6 +92,92 @@ def _refresh_iaq_match_status(iaq_features: list) -> None:
         props["match_status"] = "matched" if props.get("iaq_matched") else "iaq_only"
 
 
+# ── Task 16: daily integrity metrics ────────────────────────────────────
+def _compute_integrity_metrics(iaq_feats: list, features: list,
+                                contacts_table_rows: int) -> dict:
+    """Pure computation — no I/O. Reuses `orphan_iaq_features` from
+    api/survey_logic.py (the same source of truth as /api/unmatched-iaq
+    and the mobile 'Already Responded' list) so the orphan count here can
+    never drift from what surveyors actually see.
+    """
+    from survey_logic import orphan_iaq_features
+    return {
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+        "n_iaq": len(iaq_feats),
+        "n_orphans": len(orphan_iaq_features(iaq_feats, features)),
+        "n_contacts": sum(1 for f in features
+                          if (f.get("properties") or {}).get("source") != "field"),
+        "n_field_points": sum(1 for f in features
+                              if (f.get("properties") or {}).get("source") == "field"),
+        "contacts_table_rows": contacts_table_rows,
+    }
+
+
+def _table_row_count(sb, table: str) -> int:
+    """Exact row count via PostgREST's `count=exact` header. Never raises
+    — a monitoring query must never break the refresh it's monitoring."""
+    try:
+        r = sb.table(table).select("id", count="exact").execute()
+        return int(getattr(r, "count", 0) or 0)
+    except Exception as e:
+        print(f"[daily-refresh] {table} row count failed: {e}")
+        return 0
+
+
+def _previous_integrity_metrics(sb) -> dict | None:
+    """Read the integrity_metrics row as it stood BEFORE this tick's
+    upsert overwrites it — i.e. what the last refresh computed. Used
+    only for the response-count-drop check below. Never raises; missing
+    history (first-ever run) just means no drop check happens."""
+    try:
+        r = (sb.table("keystone_dashboard_data")
+               .select("payload")
+               .eq("data_type", "integrity_metrics")
+               .limit(1).execute())
+        rows = getattr(r, "data", None) or []
+        return (rows[0].get("payload") or {}) if rows else None
+    except Exception as e:
+        print(f"[daily-refresh] previous integrity metrics read failed: {e}")
+        return None
+
+
+def _persist_integrity_metrics(sb, iaq_feats: list, features: list) -> dict | None:
+    """Compute + upsert daily integrity metrics to a NEW, dedicated
+    `data_type='integrity_metrics'` row in keystone_dashboard_data.
+
+    Deliberately its own row — never touches the existing
+    community_contact / iaq_survey / analysis / parcel_address_index
+    blobs. Runs on every refresh tick (not just ticks that change
+    something) so the metric is a genuine daily heartbeat rather than
+    something that goes stale on quiet days. Never raises; a metrics
+    failure must not fail the refresh it's reporting on.
+
+    Also logs (server-side only — see Task 16 report for why this isn't
+    wired into either daily-email path) a
+    "Response count dropped from X to Y" warning when n_iaq decreases
+    versus the metrics row this same upsert is about to replace.
+    """
+    try:
+        contacts_table_rows = _table_row_count(sb, "community_contacts")
+        metrics = _compute_integrity_metrics(iaq_feats, features, contacts_table_rows)
+
+        prev = _previous_integrity_metrics(sb)
+        prev_n_iaq = prev.get("n_iaq") if prev else None
+        if isinstance(prev_n_iaq, int) and metrics["n_iaq"] < prev_n_iaq:
+            print(f"[daily-refresh] ⚠️ Response count dropped from "
+                  f"{prev_n_iaq} to {metrics['n_iaq']}")
+
+        sb.table("keystone_dashboard_data").upsert({
+            "data_type": "integrity_metrics",
+            "payload": metrics,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }, on_conflict="data_type").execute()
+        return metrics
+    except Exception as e:
+        print(f"[daily-refresh] integrity metrics persist failed: {e}")
+        return None
+
+
 def _field_row_to_feature(row: dict) -> dict | None:
     # NB: field_survey_points carries no address column — surveyors mark the
     # GPS point and add notes only. We deliberately do not surface any
@@ -268,6 +354,12 @@ def _run_refresh() -> dict:
             }, on_conflict="data_type").execute()
         except Exception as e:
             print(f"[daily-refresh] iaq_survey blob persist failed: {e}")
+
+    # Task 16: daily integrity metrics — a NEW data_type='integrity_metrics'
+    # row, computed on every tick regardless of whether anything else
+    # changed. Never touches community_contact / iaq_survey / analysis /
+    # parcel_address_index.
+    _persist_integrity_metrics(sb, iaq_feats, features)
 
     # Persist merged blob + version snapshot — but only when something
     # actually changed. Empty refresh ticks (no new rows AND no IAQ
