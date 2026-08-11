@@ -150,6 +150,37 @@ def _load_all_field_features(sb) -> list:
     return [f for f in (_field_row_to_feature(r) for r in rows) if f is not None]
 
 
+def _upgrade_field_points_iaq_matched(sb, upgraded_ids: list) -> None:
+    """Bulk-mark field_survey_points rows Completed + iaq_matched=true.
+
+    Task 14: migration 22 added `field_survey_points.iaq_matched` but no
+    code path ever wrote it (stuck `false` on all rows). This is the
+    ONE place the codebase UPDATEs an existing field_survey_points row —
+    it already set `status: 'Completed'` for `upgraded_ids` (the ids the
+    IAQ matcher just confirmed this pass); we extend that SAME update to
+    also set `iaq_matched: true`, rather than adding a second write.
+
+    Guarantees:
+      - Touches ONLY `status` and `iaq_matched` — never `notes`, `lat`,
+        `lon`, or `collected_at`.
+      - Only ever sets iaq_matched false -> true: `upgraded_ids` is
+        already the just-matched set, and there is no code path here
+        that flips it back to false.
+      - Never widens which rows are touched — same `upgraded_ids` list
+        the pre-existing status update used.
+      - Never raises — a failed bulk upgrade must not fail the upload
+        (the real IAQ data was already saved before this runs).
+    """
+    if not upgraded_ids:
+        return
+    try:
+        sb.table('field_survey_points').update(
+            {'status': 'Completed', 'iaq_matched': True}
+        ).in_('id', upgraded_ids).execute()
+    except Exception as e:
+        print(f"[upload/iaq] bulk field-point upgrade failed n={len(upgraded_ids)}: {e}")
+
+
 def _is_field_feature(f: dict) -> bool:
     p = (f or {}).get('properties') or {}
     return p.get('source') == 'field' or p.get('field_point_id') is not None
@@ -526,13 +557,7 @@ class handler(BaseHTTPRequestHandler):
                     if (ff['properties'].get('has_iaq_survey')
                         and ff['properties'].get('status') == 'Completed')
                 ]
-                if upgraded_ids:
-                    try:
-                        sb.table('field_survey_points').update(
-                            {'status': 'Completed'}
-                        ).in_('id', upgraded_ids).execute()
-                    except Exception as e:
-                        print(f"[upload/iaq] bulk field-point upgrade failed n={len(upgraded_ids)}: {e}")
+                _upgrade_field_points_iaq_matched(sb, upgraded_ids)
                 if n_field_upgraded > 0:
                     try:
                         sb.table('keystone_analysis_versions').insert({
