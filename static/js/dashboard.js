@@ -5598,8 +5598,107 @@ function initUserMenu(user) {
     window.location.replace('/login');
   });
 
+  initChangePassword(email);
+
   // Resolve role and update the chip + gate the Team button.
   refreshMyRole();
+}
+
+
+// ── Self-service password change ────────────────────────────────────────────
+// Deliberately email-free: Supabase's auth.updateUser({password}) acts on the
+// CURRENT session, so this works even when outbound mail is broken. We still
+// re-authenticate with the existing password first — updateUser alone would
+// let anyone who walks up to an unlocked, already-signed-in browser silently
+// take over the account.
+function initChangePassword(email) {
+  const overlay = document.getElementById('pw-modal');
+  const openBtn = document.getElementById('btn-change-password');
+  if (!overlay || !openBtn) return;
+  const form    = document.getElementById('pw-form');
+  const closeB  = document.getElementById('pw-modal-close');
+  const cur     = document.getElementById('pw-current');
+  const nw      = document.getElementById('pw-new');
+  const conf    = document.getElementById('pw-confirm');
+  const show    = document.getElementById('pw-show');
+  const submit  = document.getElementById('pw-submit');
+  const msg     = document.getElementById('pw-msg');
+  // Hidden username field keeps password managers happy (they need to know
+  // WHICH account the new password belongs to).
+  const uname   = document.getElementById('pw-username');
+  if (uname) uname.value = email || '';
+
+  const say = (text, ok) => {
+    msg.textContent = text;
+    msg.style.color = ok ? '#34d399' : '#ef4444';
+  };
+  const reset = () => {
+    form.reset();
+    if (uname) uname.value = email || '';
+    say('', true);
+    [cur, nw, conf].forEach(i => { i.type = 'password'; });
+    if (show) show.checked = false;
+  };
+  const close = () => {
+    overlay.classList.remove('show');
+    overlay.style.display = 'none';
+    reset();
+  };
+
+  openBtn.addEventListener('click', () => {
+    const pop = document.getElementById('user-menu-pop');
+    if (pop) pop.style.display = 'none';
+    reset();
+    overlay.style.display = 'flex';
+    overlay.classList.add('show');
+    setTimeout(() => cur.focus(), 50);
+  });
+  closeB.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && overlay.classList.contains('show')) close();
+  });
+  if (show) {
+    show.addEventListener('change', () => {
+      const t = show.checked ? 'text' : 'password';
+      [cur, nw, conf].forEach(i => { i.type = t; });
+    });
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!sbClient) { say('Not signed in.', false); return; }
+    const currentPw = cur.value;
+    const newPw     = nw.value;
+    if (newPw !== conf.value)      { say('The two new passwords do not match.', false); return; }
+    if (newPw.length < 8)          { say('New password must be at least 8 characters.', false); return; }
+    if (newPw === currentPw)       { say('New password must be different from the current one.', false); return; }
+
+    submit.disabled = true; submit.textContent = 'Updating…'; say('', true);
+    try {
+      // 1. Prove the person at the keyboard knows the existing password.
+      const { data: sess } = await sbClient.auth.getSession();
+      const addr = sess?.session?.user?.email || email;
+      if (!addr) throw new Error('Could not determine your account email.');
+      const { error: reauthErr } = await sbClient.auth.signInWithPassword({
+        email: addr, password: currentPw,
+      });
+      if (reauthErr) throw new Error('Current password is incorrect.');
+
+      // 2. Apply the new password to the (now freshly re-authenticated) session.
+      const { error: updErr } = await sbClient.auth.updateUser({ password: newPw });
+      if (updErr) throw new Error(updErr.message || 'Could not update the password.');
+
+      say('Password updated. Use the new password next time you sign in.', true);
+      form.reset();
+      if (uname) uname.value = addr;
+      setTimeout(close, 2600);
+    } catch (err) {
+      say(err.message || 'Password change failed.', false);
+    } finally {
+      submit.disabled = false; submit.textContent = 'Update password';
+    }
+  });
 }
 
 async function refreshMyRole() {

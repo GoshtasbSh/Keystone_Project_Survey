@@ -450,6 +450,44 @@ button{cursor:pointer;font-family:'Inter',system-ui,sans-serif;border:none;backg
 @keyframes t-out{from{opacity:1;}to{opacity:0;transform:translateY(-4px);}}
 .toast-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
 
+/* ── CHANGE-PASSWORD MODAL ── */
+.pw-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:900;
+  display:none;align-items:center;justify-content:center;padding:18px;
+}
+.pw-overlay.show{display:flex;}
+.pw-card{
+  width:100%;max-width:400px;background:var(--card);
+  border:1px solid var(--border);border-radius:16px;
+  box-shadow:var(--shadow);padding:20px;max-height:90dvh;overflow-y:auto;
+}
+.pw-card h3{
+  font-family:'Plus Jakarta Sans',sans-serif;font-size:17px;font-weight:800;
+  color:var(--text);margin-bottom:4px;
+}
+.pw-card .pw-sub{font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.5;}
+.pw-fld{display:flex;flex-direction:column;gap:5px;margin-bottom:12px;}
+.pw-fld label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
+.pw-fld input[type=password],.pw-fld input[type=text]{
+  width:100%;padding:11px 12px;border-radius:9px;
+  border:1px solid var(--border);background:var(--card-2);
+  color:var(--text);font-size:15px;font-family:inherit;
+}
+.pw-fld input:focus{outline:none;border-color:var(--accent);}
+.pw-showrow{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:14px;cursor:pointer;user-select:none;}
+.pw-btn{
+  width:100%;padding:12px;border-radius:10px;border:none;
+  background:var(--accent);color:var(--fab-txt);
+  font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;
+}
+.pw-btn:disabled{opacity:.55;cursor:default;}
+.pw-cancel{
+  width:100%;padding:10px;margin-top:8px;border-radius:10px;
+  border:1px solid var(--border);background:transparent;color:var(--muted);
+  font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;
+}
+.pw-msg{font-size:12.5px;line-height:1.5;min-height:17px;margin-top:10px;}
+
 /* ── BOTTOM SHEET (registration) ── */
 .bs-overlay{
   position:fixed;inset:0;background:rgba(0,0,0,.55);
@@ -894,6 +932,7 @@ button{cursor:pointer;font-family:'Inter',system-ui,sans-serif;border:none;backg
           <div class="live-dot" style="margin-right:2px;background:#34d399;animation:blink 2s infinite;width:6px;height:6px;border-radius:50%;"></div>
           <div class="online-lbl" id="sb-online">Online</div>
         </div>
+        <button class="signout-btn" id="pw-open-btn" style="display:none;margin-bottom:7px">Change Password</button>
         <button class="signout-btn" id="signout-btn">Sign Out</button>
         <a href="/dashboard" class="admin-link" id="desktop-link" style="display:none">🖥 Open Desktop Dashboard</a>
         <a href="/admin" class="admin-link">⚙ Admin &amp; Data Upload</a>
@@ -902,6 +941,33 @@ button{cursor:pointer;font-family:'Inter',system-ui,sans-serif;border:none;backg
   </aside>
 
   <div class="backdrop" id="backdrop"></div>
+
+<!-- Change-password modal (signed-in users only; guests have no auth account) -->
+<div class="pw-overlay" id="pw-overlay">
+  <div class="pw-card">
+    <h3>Change password</h3>
+    <div class="pw-sub">Enter your current password, then choose a new one.</div>
+    <form id="pw-form" autocomplete="off">
+      <input type="text" id="pw-username" autocomplete="username" style="display:none" tabindex="-1" aria-hidden="true">
+      <div class="pw-fld">
+        <label for="pw-current">Current password</label>
+        <input type="password" id="pw-current" required autocomplete="current-password">
+      </div>
+      <div class="pw-fld">
+        <label for="pw-new">New password (min 8)</label>
+        <input type="password" id="pw-new" required minlength="8" autocomplete="new-password">
+      </div>
+      <div class="pw-fld">
+        <label for="pw-confirm">Confirm new password</label>
+        <input type="password" id="pw-confirm" required minlength="8" autocomplete="new-password">
+      </div>
+      <label class="pw-showrow"><input type="checkbox" id="pw-show"> Show passwords</label>
+      <button type="submit" class="pw-btn" id="pw-submit">Update password</button>
+      <button type="button" class="pw-cancel" id="pw-cancel">Cancel</button>
+      <div class="pw-msg" id="pw-msg"></div>
+    </form>
+  </div>
+</div>
 
   <div class="map-area">
     <div id="map"></div>
@@ -1407,7 +1473,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const u = session.user;
   const name = u.user_metadata?.full_name || u.email.split('@')[0];
   const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
-  currentUser = { name, initials, id: u.id };
+  currentUser = { name, initials, id: u.id, email: u.email };
+  // Signed-in users can change their own password; guests have no account.
+  initChangePassword(u.email);
   // Identity is now set → load the offline queue under the correct key
   // (ks-queue-<uid>) so reloads replay queued points. (C3)
   loadQueueFromStorage();
@@ -4295,6 +4363,84 @@ async function downloadCSV(table) {
 }
 
 /* ── SIGN OUT ── */
+
+// ── Self-service password change ────────────────────────────────────────────
+// Email-free by design: auth.updateUser({password}) acts on the current
+// session, so this keeps working while outbound mail is down. The current
+// password is re-verified first so an unattended signed-in phone can't be
+// used to hijack the account.
+function initChangePassword(email) {
+  const overlay = document.getElementById('pw-overlay');
+  const openBtn = document.getElementById('pw-open-btn');
+  if (!overlay || !openBtn || IS_GUEST || !sb) return;
+  openBtn.style.display = '';
+
+  const form   = document.getElementById('pw-form');
+  const cur    = document.getElementById('pw-current');
+  const nw     = document.getElementById('pw-new');
+  const conf   = document.getElementById('pw-confirm');
+  const show   = document.getElementById('pw-show');
+  const submit = document.getElementById('pw-submit');
+  const cancel = document.getElementById('pw-cancel');
+  const msg    = document.getElementById('pw-msg');
+  const uname  = document.getElementById('pw-username');
+  if (uname) uname.value = email || '';
+
+  const say = (t, ok) => { msg.textContent = t; msg.style.color = ok ? 'var(--success)' : 'var(--danger)'; };
+  const reset = () => {
+    form.reset();
+    if (uname) uname.value = email || '';
+    say('', true);
+    [cur, nw, conf].forEach(i => { i.type = 'password'; });
+    if (show) show.checked = false;
+  };
+  const close = () => { overlay.classList.remove('show'); reset(); };
+
+  openBtn.addEventListener('click', () => {
+    if (sidebarOpen) toggleSidebar();
+    reset();
+    overlay.classList.add('show');
+    setTimeout(() => cur.focus(), 60);
+  });
+  cancel.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && overlay.classList.contains('show')) close();
+  });
+  show.addEventListener('change', () => {
+    const t = show.checked ? 'text' : 'password';
+    [cur, nw, conf].forEach(i => { i.type = t; });
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const currentPw = cur.value, newPw = nw.value;
+    if (newPw !== conf.value) { say('The two new passwords do not match.', false); return; }
+    if (newPw.length < 8)     { say('New password must be at least 8 characters.', false); return; }
+    if (newPw === currentPw)  { say('New password must be different from the current one.', false); return; }
+
+    submit.disabled = true; submit.textContent = 'Updating…'; say('', true);
+    try {
+      const { data: sess } = await sb.auth.getSession();
+      const addr = sess?.session?.user?.email || email;
+      if (!addr) throw new Error('Could not determine your account email.');
+      const { error: reauthErr } = await sb.auth.signInWithPassword({ email: addr, password: currentPw });
+      if (reauthErr) throw new Error('Current password is incorrect.');
+      const { error: updErr } = await sb.auth.updateUser({ password: newPw });
+      if (updErr) throw new Error(updErr.message || 'Could not update the password.');
+      say('Password updated. Use the new password next time you sign in.', true);
+      form.reset();
+      if (uname) uname.value = addr;
+      showToast('Password updated', '#34d399');
+      setTimeout(close, 2400);
+    } catch (err) {
+      say(err.message || 'Password change failed.', false);
+    } finally {
+      submit.disabled = false; submit.textContent = 'Update password';
+    }
+  });
+}
+
 async function signOut() {
   // Warn before discarding any queued offline writes — they belong to the
   // outgoing user/guest and will be filtered out at sync if a different

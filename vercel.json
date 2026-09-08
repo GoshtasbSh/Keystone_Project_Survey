@@ -18,6 +18,7 @@
     { "source": "/field/",           "destination": "/keystone_field_web/index" },
     { "source": "/field/:path*",     "destination": "/keystone_field_web/:path*" },
     { "source": "/login",            "destination": "/keystone_field_web/login" },
+    { "source": "/reset",            "destination": "/keystone_field_web/reset" },
     { "source": "/admin",            "destination": "/keystone_field_web/admin" },
     { "source": "/dashboard",        "destination": "/static/index.html" },
     { "source": "/dashboard/",       "destination": "/static/index.html" },

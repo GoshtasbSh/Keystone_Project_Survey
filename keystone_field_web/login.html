@@ -161,6 +161,7 @@ form.active{display:block;}
         <input type="password" id="login-password" placeholder="••••••••" required autocomplete="current-password">
       </div>
       <button type="submit" class="btn-submit" id="login-btn">Sign In</button>
+      <button type="button" class="btn-secondary" id="forgot-btn" onclick="doForgot()">Forgot your password?</button>
       <div class="msg" id="login-msg"></div>
     </form>
 
@@ -324,6 +325,37 @@ function showMsg(id, text, type) {
   const el = document.getElementById(id);
   el.textContent = text;
   el.className = `msg ${type} show`;
+}
+
+// Send a password-reset email. Supabase delivers this through its OWN mail
+// service (noreply@mail.app.supabase.io), independent of the project's
+// Gmail/Resend configuration, so it keeps working when project mail is down.
+// redirectTo must be listed under Authentication → URL Configuration →
+// Redirect URLs in the Supabase dashboard, otherwise Supabase silently falls
+// back to the project Site URL.
+async function doForgot() {
+  if (!sb) return;
+  const email = document.getElementById('login-email').value.trim();
+  if (!email || !email.includes('@')) {
+    showMsg('login-msg', 'Enter your email address above first, then tap "Forgot your password?".', 'error');
+    document.getElementById('login-email').focus();
+    return;
+  }
+  const btn = document.getElementById('forgot-btn');
+  btn.disabled = true; btn.textContent = 'Sending\u2026';
+  const { error } = await sb.auth.resetPasswordForEmail(email, {
+    redirectTo: window.location.origin + '/reset',
+  });
+  btn.disabled = false; btn.textContent = 'Forgot your password?';
+  if (error) {
+    showMsg('login-msg', error.message, 'error');
+    return;
+  }
+  // Deliberately not confirming whether the address exists — that would let
+  // anyone enumerate which emails have accounts.
+  showMsg('login-msg',
+    'If an account exists for ' + email + ', a reset link is on its way. ' +
+    'Check your inbox (and spam folder) \u2014 the link expires shortly.', 'info');
 }
 
 async function doLogin(e) {

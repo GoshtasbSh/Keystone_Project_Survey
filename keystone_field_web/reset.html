@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html data-theme="dark" lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KeyStone Field — Set a New Password</title>
+<link rel="icon" href="data:,">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root,[data-theme="dark"]{
+  --bg:#0d1117;--card:#161b22;--border:rgba(255,255,255,.09);
+  --text:#e6edf3;--muted:#8b949e;
+  --accent:#38bdf8;--accent-l:rgba(56,189,248,.12);--accent-b:rgba(56,189,248,.28);
+  --input-bg:#0d1117;--input-bdr:rgba(255,255,255,.12);
+  --btn-bg:#38bdf8;--btn-txt:#0d1117;
+  --error:#ef4444;--success:#34d399;
+  --shadow:0 8px 32px rgba(0,0,0,.55);
+  color-scheme:dark;
+}
+[data-theme="light"]{
+  --bg:#f0f2f5;--card:#fff;--border:#e4e6eb;
+  --text:#050505;--muted:#65676b;
+  --accent:#1877F2;--accent-l:rgba(24,119,242,.08);--accent-b:rgba(24,119,242,.25);
+  --input-bg:#fff;--input-bdr:#ccd0d5;
+  --btn-bg:#1877F2;--btn-txt:#fff;
+  --error:#dc2626;--success:#059669;
+  --shadow:0 4px 20px rgba(0,0,0,.12);
+  color-scheme:light;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{
+  width:100%;min-height:100%;
+  font-family:'Inter',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);
+  display:flex;align-items:center;justify-content:center;
+  padding:20px;
+}
+.card{
+  width:100%;max-width:420px;
+  background:var(--card);border:1px solid var(--border);
+  border-radius:16px;padding:32px 28px;
+  box-shadow:var(--shadow);
+}
+.logo{display:flex;align-items:center;gap:10px;margin-bottom:28px;justify-content:center;}
+.logo-dot{width:12px;height:12px;border-radius:50%;background:var(--accent);}
+.logo-name{
+  font-family:'Plus Jakarta Sans',sans-serif;font-size:20px;font-weight:800;
+  color:var(--text);letter-spacing:.01em;
+}
+.tabs{display:flex;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:4px;margin-bottom:24px;}
+.tab{
+  flex:1;padding:9px;border-radius:7px;border:none;background:none;
+  font-family:'Plus Jakarta Sans',sans-serif;font-size:13px;font-weight:700;
+  color:var(--muted);cursor:pointer;transition:all .18s;
+}
+.tab.active{background:var(--card);color:var(--text);box-shadow:0 1px 4px rgba(0,0,0,.15);}
+[data-theme="light"] .tab.active{box-shadow:0 1px 4px rgba(0,0,0,.1);}
+
+form{display:none;}
+form.active{display:block;}
+
+.field{margin-bottom:14px;}
+.field label{
+  display:block;margin-bottom:5px;
+  font-size:12px;font-weight:600;color:var(--muted);
+  letter-spacing:.02em;
+}
+.field input{
+  width:100%;padding:10px 13px;
+  background:var(--input-bg);border:1px solid var(--input-bdr);
+  border-radius:9px;color:var(--text);
+  font-family:'Inter',sans-serif;font-size:14px;outline:none;
+  transition:border-color .15s;
+}
+.field input:focus{border-color:var(--accent);}
+.field input::placeholder{color:var(--muted);}
+
+.btn-submit{
+  width:100%;padding:12px;margin-top:6px;
+  background:var(--btn-bg);color:var(--btn-txt);
+  font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;font-weight:800;
+  border:none;border-radius:10px;cursor:pointer;letter-spacing:.02em;
+  transition:opacity .15s,transform .12s;
+}
+.btn-submit:hover{opacity:.92;}
+.btn-submit:active{transform:scale(.98);}
+.btn-submit:disabled{opacity:.55;cursor:not-allowed;}
+
+.btn-secondary{
+  width:100%;padding:10px;margin-top:8px;
+  background:transparent;color:var(--muted);
+  font-family:'Plus Jakarta Sans',sans-serif;font-size:12px;font-weight:600;
+  border:1px solid var(--border);border-radius:8px;cursor:pointer;
+  transition:opacity .15s;
+}
+.btn-secondary:hover{opacity:.7;}
+
+.msg{
+  margin-top:12px;padding:10px 13px;border-radius:8px;
+  font-size:12px;font-weight:500;line-height:1.45;display:none;
+}
+.msg.error{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);color:var(--error);}
+.msg.info{background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.25);color:var(--success);}
+.msg.show{display:block;}
+
+.claim-hint{
+  margin-bottom:14px;padding:12px;border-radius:9px;
+  background:var(--accent-l);border:1px solid var(--accent-b);
+  font-size:12.5px;line-height:1.5;color:var(--text);
+}
+.claim-hint b{font-weight:700;}
+.claim-hint code{
+  background:var(--bg);padding:1px 5px;border-radius:4px;
+  font-family:ui-monospace,'SFMono-Regular','Menlo',monospace;
+  font-size:11.5px;
+}
+
+.field input.invite-code{
+  text-transform:uppercase;letter-spacing:.18em;
+  text-align:center;font-size:18px;font-weight:700;
+  font-family:ui-monospace,'SFMono-Regular','Menlo',monospace;
+}
+
+.footer-txt{
+  margin-top:20px;text-align:center;font-size:11px;color:var(--muted);
+}
+.footer-txt a{color:var(--accent);text-decoration:none;}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="logo">
+    <div class="logo-dot"></div>
+    <span class="logo-name">KeyStone Field</span>
+  </div>
+
+  <!-- Shown while we work out whether the recovery link in the URL is valid. -->
+  <div id="stage-checking" style="text-align:center;color:var(--muted);font-size:13px;padding:12px 0">
+    Checking your reset link&hellip;
+  </div>
+
+  <!-- Invalid / expired / already-used link. -->
+  <div id="stage-invalid" style="display:none">
+    <div class="claim-hint">
+      <b>This reset link isn't valid.</b> Password reset links work once and
+      expire after a short time. Request a new one from the sign-in page.
+    </div>
+    <button type="button" class="btn-submit" onclick="location.href='/login'">Back to sign in</button>
+  </div>
+
+  <!-- Valid recovery session → let them choose a new password. -->
+  <form id="stage-form" style="display:none" onsubmit="doReset(event)" autocomplete="off">
+    <div class="claim-hint" style="margin-bottom:16px">
+      Choose a new password for <b id="reset-email">your account</b>.
+    </div>
+    <input type="text" id="reset-username" autocomplete="username" style="display:none" tabindex="-1" aria-hidden="true">
+    <div class="field">
+      <label>New password <span style="font-weight:400;opacity:.6">(min 8 characters)</span></label>
+      <input type="password" id="reset-new" required minlength="8" autocomplete="new-password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;">
+    </div>
+    <div class="field">
+      <label>Confirm new password</label>
+      <input type="password" id="reset-confirm" required minlength="8" autocomplete="new-password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;">
+    </div>
+    <button type="submit" class="btn-submit" id="reset-btn">Set new password</button>
+    <button type="button" class="btn-secondary" onclick="location.href='/login'">Cancel</button>
+    <div class="msg" id="reset-msg"></div>
+  </form>
+
+  <div class="footer-txt">KeyStone Field Survey</div>
+</div>
+
+<script>
+let sb = null;
+
+function show(stage) {
+  // NOTE: the shared stylesheet (inherited from login.html) carries a blanket
+  // `form{display:none}` rule, so an empty inline display would leave
+  // #stage-form hidden. Always set an explicit value.
+  ['checking','invalid','form'].forEach(n => {
+    document.getElementById('stage-' + n).style.display = (n === stage) ? 'block' : 'none';
+  });
+}
+function showMsg(text, type) {
+  const el = document.getElementById('reset-msg');
+  el.textContent = text;
+  el.className = 'msg ' + type + ' show';
+}
+
+async function loadConfig() {
+  const r = await fetch('/api/config', { cache: 'no-store' });
+  if (!r.ok) throw new Error('config');
+  return r.json();
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  let cfg;
+  try { cfg = await loadConfig(); } catch { show('invalid'); return; }
+  if (!cfg.supabase_url) { show('invalid'); return; }
+
+  // detectSessionInUrl (on by default) consumes the #access_token=...&type=recovery
+  // fragment Supabase appends when the emailed link is followed, and turns it
+  // into a short-lived session that is allowed to set a new password.
+  sb = window.supabase.createClient(cfg.supabase_url, cfg.supabase_anon_key);
+
+  // Surface an explicit error carried in the URL (expired/used link) rather
+  // than silently showing "invalid".
+  const hash = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+  const qs   = new URLSearchParams(location.search);
+  const urlErr = hash.get('error_description') || qs.get('error_description');
+
+  // Give supabase-js a moment to parse the fragment before we inspect state.
+  let session = null;
+  for (let i = 0; i < 20 && !session; i++) {
+    const { data } = await sb.auth.getSession();
+    session = data.session;
+    if (!session) await new Promise(r => setTimeout(r, 100));
+  }
+
+  if (!session) {
+    show('invalid');
+    if (urlErr) {
+      const box = document.querySelector('#stage-invalid .claim-hint');
+      if (box) box.innerHTML = '<b>This reset link isn\'t valid.</b> ' + urlErr;
+    }
+    return;
+  }
+
+  const email = session.user?.email || '';
+  document.getElementById('reset-email').textContent = email || 'your account';
+  document.getElementById('reset-username').value = email;
+  show('form');
+  setTimeout(() => document.getElementById('reset-new').focus(), 60);
+});
+
+async function doReset(e) {
+  e.preventDefault();
+  const pw   = document.getElementById('reset-new').value;
+  const conf = document.getElementById('reset-confirm').value;
+  const btn  = document.getElementById('reset-btn');
+  if (pw !== conf)   { showMsg('The two passwords do not match.', 'error'); return; }
+  if (pw.length < 8) { showMsg('Password must be at least 8 characters.', 'error'); return; }
+
+  btn.disabled = true; btn.textContent = 'Saving\u2026';
+  const { error } = await sb.auth.updateUser({ password: pw });
+  if (error) {
+    showMsg(error.message || 'Could not set the password.', 'error');
+    btn.disabled = false; btn.textContent = 'Set new password';
+    return;
+  }
+  showMsg('Password updated. Redirecting to sign in\u2026', 'info');
+  // Drop the recovery session so the next screen is a clean sign-in with the
+  // new password (and the one-time link can't be reused from this tab).
+  try { await sb.auth.signOut(); } catch {}
+  setTimeout(() => location.replace('/login'), 1800);
+}
+</script>
+</body>
+</html>
