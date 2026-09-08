@@ -223,8 +223,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (!session) {
     show('invalid');
     if (urlErr) {
+      // urlErr is attacker-controllable (it comes straight off the URL), so it
+      // must never reach innerHTML — this page's CSP allows 'unsafe-inline',
+      // which would make an injected handler executable on the very page that
+      // handles recovery tokens. Build the node and set the text safely.
       const box = document.querySelector('#stage-invalid .claim-hint');
-      if (box) box.innerHTML = '<b>This reset link isn\'t valid.</b> ' + urlErr;
+      if (box) {
+        box.textContent = '';
+        const b = document.createElement('b');
+        b.textContent = "This reset link isn't valid.";
+        box.appendChild(b);
+        box.appendChild(document.createTextNode(' ' + urlErr));
+      }
     }
     return;
   }
