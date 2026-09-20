@@ -1,0 +1,639 @@
+{
+  "streets": [
+    {
+      "name": "Field Survey",
+      "count": 44,
+      "statuses": {
+        "Vacant": 1,
+        "Unknown": 1,
+        "Completed": 24,
+        "Follow Up": 4,
+        "Left Info": 2,
+        "No Answer": 5,
+        "Inaccessible": 4,
+        "Not Interested": 3
+      }
+    },
+    {
+      "name": "Dennison",
+      "count": 35,
+      "statuses": {
+        "Completed": 6,
+        "Follow Up": 2,
+        "Left Info": 1,
+        "No Answer": 13,
+        "Inaccessible": 11,
+        "Not Interested": 2
+      }
+    },
+    {
+      "name": "Baylor Ave",
+      "count": 29,
+      "statuses": {
+        "Completed": 6,
+        "Left Info": 3,
+        "No Answer": 14,
+        "Inaccessible": 4,
+        "Not Interested": 2
+      }
+    },
+    {
+      "name": "Yale St",
+      "count": 16,
+      "statuses": {
+        "Other": 3,
+        "Vacant": 4,
+        "Completed": 3,
+        "Left Info": 2,
+        "No Answer": 1,
+        "Inaccessible": 3
+      }
+    },
+    {
+      "name": "Bucknell",
+      "count": 15,
+      "statuses": {
+        "Vacant": 2,
+        "Completed": 6,
+        "No Answer": 3,
+        "Inaccessible": 3,
+        "Not Interested": 1
+      }
+    },
+    {
+      "name": "Harvard Ave",
+      "count": 12,
+      "statuses": {
+        "Completed": 6,
+        "Left Info": 2,
+        "No Answer": 2,
+        "Inaccessible": 2
+      }
+    },
+    {
+      "name": "Vassar Dr",
+      "count": 11,
+      "statuses": {
+        "Other": 1,
+        "Completed": 3,
+        "Left Info": 1,
+        "No Answer": 4,
+        "Inaccessible": 2
+      }
+    },
+    {
+      "name": "Cascade",
+      "count": 10,
+      "statuses": {
+        "Completed": 4,
+        "Left Info": 1,
+        "No Answer": 3,
+        "Inaccessible": 2
+      }
+    },
+    {
+      "name": "Pembroke St",
+      "count": 10,
+      "statuses": {
+        "Completed": 5,
+        "Left Info": 2,
+        "No Answer": 2,
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Skidmore",
+      "count": 9,
+      "statuses": {
+        "Vacant": 1,
+        "Completed": 1,
+        "Left Info": 1,
+        "No Answer": 1,
+        "Inaccessible": 4,
+        "Not Interested": 1
+      }
+    },
+    {
+      "name": "Furman Ave",
+      "count": 8,
+      "statuses": {
+        "Vacant": 2,
+        "Left Info": 2,
+        "No Answer": 2,
+        "Inaccessible": 2
+      }
+    },
+    {
+      "name": "Purdue St",
+      "count": 8,
+      "statuses": {
+        "Completed": 3,
+        "Left Info": 2,
+        "No Answer": 3
+      }
+    },
+    {
+      "name": "Bucknell Ave",
+      "count": 7,
+      "statuses": {
+        "Completed": 2,
+        "No Answer": 1,
+        "Inaccessible": 3,
+        "Not Interested": 1
+      }
+    },
+    {
+      "name": "Swarthmore",
+      "count": 7,
+      "statuses": {
+        "Unknown": 2,
+        "Completed": 2,
+        "Left Info": 1,
+        "No Answer": 1,
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Beloit Ave",
+      "count": 6,
+      "statuses": {
+        "Completed": 4,
+        "No Answer": 1,
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Duke St",
+      "count": 6,
+      "statuses": {
+        "Completed": 4,
+        "No Answer": 2
+      }
+    },
+    {
+      "name": "Bowdoin",
+      "count": 5,
+      "statuses": {
+        "Completed": 1,
+        "Left Info": 1,
+        "No Answer": 3
+      }
+    },
+    {
+      "name": "Vassar",
+      "count": 5,
+      "statuses": {
+        "Other": 2,
+        "No Answer": 1,
+        "Inaccessible": 1,
+        "Not Interested": 1
+      }
+    },
+    {
+      "name": "Vanderbilt Dr",
+      "count": 4,
+      "statuses": {
+        "Other": 1,
+        "No Answer": 1,
+        "Inaccessible": 2
+      }
+    },
+    {
+      "name": "Alliance Ave",
+      "count": 4,
+      "statuses": {
+        "Completed": 2,
+        "No Answer": 1,
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Amherst",
+      "count": 4,
+      "statuses": {
+        "No Answer": 3,
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Rollins St",
+      "count": 4,
+      "statuses": {
+        "Vacant": 1,
+        "Completed": 1,
+        "No Answer": 1,
+        "Not Interested": 1
+      }
+    },
+    {
+      "name": "Piedmont",
+      "count": 4,
+      "statuses": {
+        "Other": 1,
+        "Completed": 3
+      }
+    },
+    {
+      "name": "Temple St",
+      "count": 4,
+      "statuses": {
+        "Completed": 1,
+        "No Answer": 1,
+        "Inaccessible": 2
+      }
+    },
+    {
+      "name": "Wofford Dr",
+      "count": 4,
+      "statuses": {
+        "No Answer": 3,
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Amherst Ave",
+      "count": 3,
+      "statuses": {
+        "No Answer": 2,
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Bowdoin Ave",
+      "count": 3,
+      "statuses": {
+        "Completed": 2,
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Purdue St.",
+      "count": 3,
+      "statuses": {
+        "Vacant": 1,
+        "Completed": 1,
+        "Not Interested": 1
+      }
+    },
+    {
+      "name": "Temple",
+      "count": 3,
+      "statuses": {
+        "Vacant": 1,
+        "Completed": 1,
+        "No Answer": 1
+      }
+    },
+    {
+      "name": "Villanova Dr",
+      "count": 3,
+      "statuses": {
+        "No Answer": 2,
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Notre Dame St",
+      "count": 3,
+      "statuses": {
+        "Completed": 3
+      }
+    },
+    {
+      "name": "Reed Dr",
+      "count": 2,
+      "statuses": {
+        "No Answer": 1,
+        "Not Interested": 1
+      }
+    },
+    {
+      "name": "Antioch",
+      "count": 2,
+      "statuses": {
+        "Completed": 2
+      }
+    },
+    {
+      "name": "Baylor",
+      "count": 2,
+      "statuses": {
+        "Completed": 2
+      }
+    },
+    {
+      "name": "Tulsa Dr",
+      "count": 2,
+      "statuses": {
+        "Completed": 1,
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Notre Dame",
+      "count": 2,
+      "statuses": {
+        "Other": 1,
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Colgate Rd",
+      "count": 1,
+      "statuses": {
+        "Completed": 1
+      }
+    },
+    {
+      "name": "Emory Ave",
+      "count": 1,
+      "statuses": {
+        "No Answer": 1
+      }
+    },
+    {
+      "name": "Amherst Ave.",
+      "count": 1,
+      "statuses": {
+        "Completed": 1
+      }
+    },
+    {
+      "name": "Auburn Rd.",
+      "count": 1,
+      "statuses": {
+        "Completed": 1
+      }
+    },
+    {
+      "name": "Bowodin",
+      "count": 1,
+      "statuses": {
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Cascade Dr",
+      "count": 1,
+      "statuses": {
+        "Completed": 1
+      }
+    },
+    {
+      "name": "cascade",
+      "count": 1,
+      "statuses": {
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Knox St",
+      "count": 1,
+      "statuses": {
+        "No Answer": 1
+      }
+    },
+    {
+      "name": "Purdue",
+      "count": 1,
+      "statuses": {
+        "Completed": 1
+      }
+    },
+    {
+      "name": "Park St.",
+      "count": 1,
+      "statuses": {
+        "Completed": 1
+      }
+    },
+    {
+      "name": "Salem Dr",
+      "count": 1,
+      "statuses": {
+        "Completed": 1
+      }
+    },
+    {
+      "name": "Yale St.",
+      "count": 1,
+      "statuses": {
+        "Completed": 1
+      }
+    },
+    {
+      "name": "Swarthrmore",
+      "count": 1,
+      "statuses": {
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Woodstock",
+      "count": 1,
+      "statuses": {
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Davidson",
+      "count": 1,
+      "statuses": {
+        "Inaccessible": 1
+      }
+    },
+    {
+      "name": "Columbia Ave",
+      "count": 1,
+      "statuses": {
+        "Completed": 1
+      }
+    },
+    {
+      "name": "Princeton St",
+      "count": 1,
+      "statuses": {
+        "Completed": 1
+      }
+    },
+    {
+      "name": "Beloit  Ave",
+      "count": 1,
+      "statuses": {
+        "No Answer": 1
+      }
+    },
+    {
+      "name": "Centre Cir",
+      "count": 1,
+      "statuses": {
+        "Completed": 1
+      }
+    },
+    {
+      "name": "BUcknell",
+      "count": 1,
+      "statuses": {
+        "Completed": 1
+      }
+    },
+    {
+      "name": "baylor",
+      "count": 1,
+      "statuses": {
+        "Left Info": 1
+      }
+    },
+    {
+      "name": "bucknell",
+      "count": 1,
+      "statuses": {
+        "Completed": 1
+      }
+    }
+  ],
+  "parcel_stats": {
+    "areas": {
+      "max": 116370,
+      "min": 62,
+      "mean": 1783,
+      "median": 1504
+    },
+    "total": 11319,
+    "years": {
+      "mean": 1991,
+      "newest": 2024,
+      "oldest": 1900
+    },
+    "values": {
+      "max": 11502582,
+      "min": 1,
+      "mean": 155112,
+      "median": 101061
+    },
+    "land_use": {
+      "Commercial": 220,
+      "Government": 186,
+      "Agriculture": 193,
+      "Residential": 208,
+      "Vacant Land": 10463,
+      "Institutional": 49
+    },
+    "year_histogram": [
+      {
+        "count": 2,
+        "label": "1900s"
+      },
+      {
+        "count": 0,
+        "label": "1910s"
+      },
+      {
+        "count": 1,
+        "label": "1920s"
+      },
+      {
+        "count": 0,
+        "label": "1930s"
+      },
+      {
+        "count": 24,
+        "label": "1940s"
+      },
+      {
+        "count": 193,
+        "label": "1950s"
+      },
+      {
+        "count": 522,
+        "label": "1960s"
+      },
+      {
+        "count": 1028,
+        "label": "1970s"
+      },
+      {
+        "count": 1480,
+        "label": "1980s"
+      },
+      {
+        "count": 1396,
+        "label": "1990s"
+      },
+      {
+        "count": 1276,
+        "label": "2000s"
+      },
+      {
+        "count": 406,
+        "label": "2010s"
+      },
+      {
+        "count": 504,
+        "label": "2020s"
+      }
+    ],
+    "value_histogram": [
+      {
+        "count": 2943,
+        "label": "<25k"
+      },
+      {
+        "count": 1170,
+        "label": "25-50k"
+      },
+      {
+        "count": 925,
+        "label": "50-75k"
+      },
+      {
+        "count": 594,
+        "label": "75-100k"
+      },
+      {
+        "count": 1195,
+        "label": "100-150k"
+      },
+      {
+        "count": 1278,
+        "label": "150-200k"
+      },
+      {
+        "count": 1709,
+        "label": "200-300k"
+      },
+      {
+        "count": 1119,
+        "label": "300-500k"
+      },
+      {
+        "count": 370,
+        "label": "500k+"
+      }
+    ]
+  },
+  "total_points": 321,
+  "status_colors": {
+    "Other": "#ec4899",
+    "Vacant": "#6b7280",
+    "Unknown": "#9ca3af",
+    "Completed": "#10b981",
+    "Follow Up": "#06b6d4",
+    "Left Info": "#3b82f6",
+    "No Answer": "#f97316",
+    "Inaccessible": "#ef4444",
+    "Not Interested": "#8b5cf6"
+  },
+  "status_counts": {
+    "Other": 9,
+    "Vacant": 13,
+    "Unknown": 3,
+    "Completed": 112,
+    "Follow Up": 6,
+    "Left Info": 22,
+    "No Answer": 81,
+    "Inaccessible": 61,
+    "Not Interested": 14
+  },
+  "completion_rate": 34.9
+}
