@@ -36,3 +36,13 @@ supabase/
 # Local-only Python deps (geopandas/fiona/shapely/pandas/fastapi/uvicorn).
 # Vercel reads the root `requirements.txt` (supabase only) for api/*.py.
 requirements-local.txt
+
+# Documentation, audit evidence and manuals — never executed at runtime and
+# never routed. These are bundled into EVERY serverless function otherwise:
+# in Sep 2026 they reached 195 MB and pushed the bundle past Vercel's 225 MB
+# limit, failing the deploy.
+docs/
+final review/
+user_manual/
+tests/
+.playwright-mcp/
