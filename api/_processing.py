@@ -851,6 +851,27 @@ def _compute_iaq_score(row) -> int:
     return round(min(score, 100))
 
 
+def _cell(row_map: dict, key: str) -> str:
+    """Read one answer cell as display text, never leaking a NaN.
+
+    `str(v or '')` looks safe but is not: pandas parses an empty numeric cell
+    as NaN, and a float is truthy, so `NaN or ''` is NaN and `str()` yields the
+    literal 'nan'. That put 167 cells reading "nan" in front of users — mostly
+    the cooling questions, where an unticked box is the normal case.
+
+    Integral floats also render as '6.0'; a recode code must read '6'.
+    """
+    v = row_map.get(key, '')
+    if v is None or _isna(v):
+        return ''
+    if isinstance(v, Real) and not isinstance(v, bool):
+        x = float(v)
+        if isfinite(x) and abs(x - round(x)) < 1e-9:
+            return str(int(round(x)))
+    s = str(v).strip()
+    return '' if s.lower() in ('nan', 'none') else s
+
+
 def _val_at_orig_idx(full_row, orig_idx):
     """Pull a raw cell value from the pre-PII-drop DataFrame row by ORIGINAL
     CSV column index. Used for blank-header / duplicate-header columns where
@@ -2176,28 +2197,29 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
                 'risk_tier':          tier,
                 'color':              tier_color,
                 'ownership':          ownership,
-                'housing_type':       str(_row_nr.get('QID128', '') or ''),
-                'year_built':         str(_row_nr.get('QID192', '') or ''),
-                'condition':          str(_row_nr.get('QID141', '') or ''),
+                'housing_type':       _cell(_row_nr, 'QID128'),
+                'year_built':         _cell(_row_nr, 'QID192'),
+                'condition':          _cell(_row_nr, 'QID141'),
                 'has_mold':           has_mold,
-                'respiratory_ill':    str(_row_nr.get('RespIll', '')  or ''),
-                'asthma_freq':        str(_row_nr.get('asthma', '')   or ''),
-                'wheeze_freq':        str(_row_nr.get('wheeze', '')   or ''),
-                'headache_freq':      str(_row_nr.get('Headache', '') or ''),
-                'tired_freq':         str(_row_nr.get('Tired', '')    or ''),
-                'hospital_visit':     ('yes' if 'yes' in str(
-                    _row_nr.get('Hospital Respiratory', '') or '').lower() else 'no'),
+                'respiratory_ill':    _cell(_row_nr, 'RespIll'),
+                'asthma_freq':        _cell(_row_nr, 'asthma'),
+                'wheeze_freq':        _cell(_row_nr, 'wheeze'),
+                'headache_freq':      _cell(_row_nr, 'Headache'),
+                'tired_freq':         _cell(_row_nr, 'Tired'),
+                'hospital_visit':     ('yes' if 'yes' in
+                                       _cell(_row_nr, 'Hospital Respiratory').lower()
+                                       else 'no'),
                 # Raw IAQ sub-items — stored so the popup can display the
                 # full per-respondent IAQ question set without showing "—".
-                'leakage_roof':       str(_row_nr.get('Leakage 2_1', '')       or ''),
-                'leakage_walls':      str(_row_nr.get('Leakage 2_2', '')       or ''),
-                'leakage_windows':    str(_row_nr.get('Leakage 2_3', '')       or ''),
-                'leakage_floor':      str(_row_nr.get('Leakage 2_4', '')       or ''),
-                'cooling_central_ac': str(_row_nr.get('Cooling System _1', '') or ''),
-                'cooling_window_unit':str(_row_nr.get('Cooling System _2', '') or ''),
-                'cooling_fan':        str(_row_nr.get('Cooling System _3', '') or ''),
-                'cooling_none':       str(_row_nr.get('Cooling System _4', '') or ''),
-                'cooking_method':     str(_row_nr.get('Cooking', '')            or ''),
+                'leakage_roof':       _cell(_row_nr, 'Leakage 2_1'),
+                'leakage_walls':      _cell(_row_nr, 'Leakage 2_2'),
+                'leakage_windows':    _cell(_row_nr, 'Leakage 2_3'),
+                'leakage_floor':      _cell(_row_nr, 'Leakage 2_4'),
+                'cooling_central_ac': _cell(_row_nr, 'Cooling System _1'),
+                'cooling_window_unit':_cell(_row_nr, 'Cooling System _2'),
+                'cooling_fan':        _cell(_row_nr, 'Cooling System _3'),
+                'cooling_none':       _cell(_row_nr, 'Cooling System _4'),
+                'cooking_method':     _cell(_row_nr, 'Cooking'),
                 'coord_source':       coord_source,
                 'response_id':        str(_row_nr.get('ResponseId', '') or _row_nr.get('Response ID', '') or ''),
                 'raw_address':        raw_addr,
