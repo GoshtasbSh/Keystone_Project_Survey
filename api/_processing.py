@@ -986,23 +986,27 @@ def _build_colname_qid_map(df_columns) -> dict:
     is a robust fallback when the ImportId metadata row is absent or
     incomplete (most TEXT exports drop it).
     """
-    out: dict = {}
     if df_columns is None:
-        return out
+        return {}
     try:
         cols = list(df_columns)
     except Exception:
-        return out
+        return {}
+    # Same precedence rule as the ImportId map: an exact QID must never be
+    # shadowed by a "_TEXT"-stripped alias from a different column, or the
+    # winner depends on which column happens to come first.
+    exact: dict = {}
+    alias: dict = {}
     qid_re = re.compile(r'(QID\d+(?:_\d+)?(?:_TEXT)?)', re.IGNORECASE)
     for idx, name in enumerate(cols):
         if not isinstance(name, str):
             continue
         for m in qid_re.findall(name):
             qid = m.upper()
-            out.setdefault(qid, idx)
-            base = qid[:-5] if qid.endswith('_TEXT') else qid
-            out.setdefault(base, idx)
-    return out
+            exact.setdefault(qid, idx)
+            if qid.endswith('_TEXT'):
+                alias.setdefault(qid[:-5], idx)
+    return {**alias, **exact}
 
 
 def _extract_survey_extras(full_row, qid_to_col_idx: dict | None = None,
@@ -2059,7 +2063,17 @@ def _read_qualtric_csv(file_bytes: bytes):
     # (drop the "_TEXT" suffix Qualtrics adds for free-text variants
     # of an otherwise-numeric question, since the same question shares
     # the same QID across both forms).
-    qid_to_col_idx: dict = {}
+    # An exact ImportId always beats a "_TEXT"-stripped alias, and the aliases
+    # are merged in only afterwards. Both used to be registered with
+    # setdefault in one pass, which made the winner depend on column ORDER:
+    # a matrix's "Other" free-text column (ImportId QID181_8_TEXT) also claims
+    # the bare QID181_8, so whichever of the two came first in the export won.
+    # In these exports the matrix column happens to precede the text column, so
+    # the right one won by luck. Permuting the columns — which Qualtrics does
+    # between exports — made reloc_factor_oth report free text ("Kids school")
+    # in place of the respondent's importance rating.
+    exact: dict = {}
+    alias: dict = {}
     if row2_has_importid:
         meta_row = head.iloc[2].tolist()
         for col_idx, cell in enumerate(meta_row):
@@ -2073,10 +2087,13 @@ def _read_qualtric_csv(file_bytes: bytes):
                 qid = _re_match.group(1) if _re_match else None
             if not qid:
                 continue
-            # Map the full QID and a normalised "_TEXT"-stripped variant.
-            qid_to_col_idx.setdefault(qid, col_idx)
-            base = qid[:-5] if qid.endswith('_TEXT') else qid
-            qid_to_col_idx.setdefault(base, col_idx)
+            exact.setdefault(qid, col_idx)
+            if qid.endswith('_TEXT'):
+                # Weaker alias: lets a question declared as QID12_TEXT still
+                # resolve against an export that only carries QID12, without
+                # ever shadowing a real column of that exact name.
+                alias.setdefault(qid[:-5], col_idx)
+    qid_to_col_idx: dict = {**alias, **exact}
 
     logging.info("[iaq] csv decoded enc=%s skip=%s rows=%d cols=%d qids=%d",
                  used_enc, skip, len(raw), len(raw.columns), len(qid_to_col_idx))

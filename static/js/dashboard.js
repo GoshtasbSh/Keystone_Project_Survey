@@ -1607,10 +1607,10 @@ const _RAW_IAQ_LABELS = {
   leakage_windows:     'What kind of water related problems have you experienced? How long did it persist? - Leaky roof/window/door',
   leakage_floor:       'What kind of water related problems have you experienced? How long did it persist? - Well not working',
   cooling_central_ac:  'What type of cooling system do you use and how old is it? (check all that apply) - Central Air-conditioning',
-  cooling_window_unit: 'What type of cooling system do you use and how old is it? (check all that apply) - Window/Wall/Portable AC',
+  cooling_window_unit: 'What type of cooling system do you use and how old is it? (check all that apply) - Window/Wall/Portable AC units for just one or two rooms',
   cooling_fan:         'What type of cooling system do you use and how old is it? (check all that apply) - Ceiling Fans',
   cooling_none:        'What type of cooling system do you use and how old is it? (check all that apply) - No Air-conditioning',
-  cooking_method:      'What stove type do you have in your home? Please select all options that apply. - Selected Choice',
+  cooking_method:      'What stove type do you have in your home? \r\nPlease select all options that apply. - Selected Choice',
 };
 
 // Numeric-coded Qualtrics exports are decoded server-side; placeholders stay visible here as muted text.

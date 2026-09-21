@@ -135,6 +135,27 @@ FIXES = [
                 "pairing is one-to-one with no exception. Both formats now read "
                 "identically. The lasting fix is to correct the export codes in Qualtrics."),
     },
+    {
+        'id': 'A4',
+        'title': 'One chart was one column away from reading the wrong answers',
+        'question': ('If you lived in another place before, how important were the '
+                     'following factors in relocating to High Ridge Estates? - Other'),
+        'what': ("This question occupies two columns in the export: the importance rating, "
+                 "and the free-text box where people write what the \"Other\" factor was. "
+                 "Both columns claimed the same question ID, and the dashboard took "
+                 "<em>whichever appeared first in the file</em>. In the exports we have, the "
+                 "rating column happens to come first, so the correct one was used &mdash; by "
+                 "luck of ordering, not by design."),
+        'scale': ("No figure currently shown is wrong. But Qualtrics reorders columns "
+                  "between exports, so a future export could have put the text column first."),
+        'effect': ("Had that happened, the \"Other\" relocation-factor chart would have shown "
+                   "people's typed answers (\"Kids school\", \"Caring for family members\") "
+                   "in place of the importance ratings, with nothing to signal the swap."),
+        'fix': ("An exact question-ID match now always beats an approximate one. We then "
+                "proved the point by shuffling all 150 columns into six random orders and "
+                "confirming that every statistic and every household's scores came out "
+                "byte-identical each time."),
+    },
 ]
 
 CAVEATS = [
@@ -281,7 +302,7 @@ research team &middot; code revision <code>{E(rev)}</code></p>
 <p>This report documents the <strong>Survey Results</strong> section of the KeyStone
 dashboard: which survey question feeds every chart and statistic, exactly how each
 number is calculated, and the checks we ran to confirm the calculations are right.
-It also records three defects we found and corrected.</p>
+It also records four defects we found and corrected.</p>
 
 <div class="card good">
 <h3 style="margin-top:0">What the checks showed</h3>
@@ -296,9 +317,9 @@ It also records three defects we found and corrected.</p>
     on the same {diff['shared_respondents']} households</span></div>
   <div class="kpi"><b>{n_hand_ok}/{len(hand)}</b><span>households whose scores were
     reproduced by an independent hand calculation</span></div>
-  <div class="kpi"><b>3</b><span>defects found, all corrected</span></div>
+  <div class="kpi"><b>4</b><span>defects found, all corrected</span></div>
 </div>
-<p style="margin-bottom:0">Three real defects were found, and all three are fixed. Apart
+<p style="margin-bottom:0">Four real defects were found, and all four are fixed. Apart
 from those, every statistic reads the column it should, the arithmetic is correct, and a
 text export and a numeric export of the same survey now produce identical results.</p>
 </div>
@@ -312,7 +333,7 @@ computed at the last data upload, so it does not yet include these corrections. 
 <strong>33.3%</strong>. The figures update when the survey data is next reprocessed.</p>
 </div>
 
-<h2>1. The three defects we found</h2>
+<h2>1. The four defects we found</h2>
 <p>Each of these changed numbers that appear in the Analysis panel. None of them altered
 any respondent's answer — they were errors in how the answers were <em>read</em>.</p>
 ''')
@@ -482,13 +503,23 @@ dashboard could not hide by being repeated, because the two were written indepen
 <p><span class="pill ok">{n_hand_ok} of {len(hand)} households match exactly</span>
 &mdash; every score, every risk band.</p>
 
+<h3>The column layout of a future export cannot change the results</h3>
+<p>Every analysis input is located by the question's Qualtrics ID, never by its position or
+its header text. We confirmed this holds in practice rather than in principle: we shuffled
+all 150 columns of the May export into six different random orders, ran the full analysis on
+each, and compared everything. All six produced <strong>byte-identical</strong> statistics
+and byte-identical per-household scores. We also confirmed that adding an unrelated new
+question changes nothing, and that <em>removing</em> a required question is refused by the
+upload guard rather than being quietly scored as zero.</p>
+
 <h3>Automated tests</h3>
 <p>The corrections are pinned by tests that state the intended reading household by
 household, so a future change that reintroduces one of these defects fails immediately
 rather than quietly shifting an average. The suite is at
 <code>tests/test_iaq_score_semantics.py</code>,
-<code>tests/test_qsf_label_resolution.py</code> and
-<code>tests/test_popup_output_is_clean.py</code>; 171 tests pass.</p>
+<code>tests/test_qsf_label_resolution.py</code>,
+<code>tests/test_export_layout_independence.py</code> and
+<code>tests/test_popup_output_is_clean.py</code>; 180 tests pass.</p>
 
 <h3>Nothing was changed on the live dashboard</h3>
 <p>This audit read the live dashboard and ran calculations locally. No survey data or field
@@ -531,6 +562,9 @@ is what caused defect A2.</li>
     <td>Runs the analysis on both exports and compares every statistic</td></tr>
 <tr><td class="mono">scripts/audit/manual_score_check.py</td>
     <td>The independent hand calculation, with the working shown per household</td></tr>
+<tr><td class="mono">scripts/audit/v2_new_upload_readiness.py</td>
+    <td>The checks on a not-yet-seen export: column shuffling, added and removed
+        columns, extra responses, payload integrity, upload guard</td></tr>
 <tr><td class="mono">docs/plans/evidence/2026-09-21-analysis-audit/format-diff.json</td>
     <td>The format comparison result</td></tr>
 <tr><td class="mono">&hellip;/manual-score-check.json</td>
