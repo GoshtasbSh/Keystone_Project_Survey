@@ -1594,18 +1594,23 @@ const _IAQ_CATEGORIES = [
   ]],
 ];
 
-// Readable labels for raw IAQ scorer fields not in SURVEY_QUESTIONS.
+// Fallback labels for raw IAQ scorer fields not in SURVEY_QUESTIONS, used only
+// when the server's survey_questions map is unavailable. These are the survey's
+// own question text, verbatim, so they can be found in the Qualtrics export.
+// The previous paraphrases ('Water leakage — Roof') were both unsearchable and
+// wrong: leakage_roof reads the 'Leakage 2_1' column, which is the
+// broken/leaky-water-pipes row, not the roof (QSF QID114).
 const _RAW_IAQ_LABELS = {
-  tired_freq:          'How often do you feel tired or fatigued in your home?',
-  leakage_roof:        'Water leakage — Roof',
-  leakage_walls:       'Water leakage — Walls',
-  leakage_windows:     'Water leakage — Windows',
-  leakage_floor:       'Water leakage — Floor',
-  cooling_central_ac:  'Cooling system — Central AC',
-  cooling_window_unit: 'Cooling system — Window unit',
-  cooling_fan:         'Cooling system — Fan only',
-  cooling_none:        'Cooling system — No cooling',
-  cooking_method:      'Cooking fuel / method',
+  tired_freq:          'How often has anyone living in your house experienced the following symptoms in the past year? - Tiredness',
+  leakage_roof:        'What kind of water related problems have you experienced? How long did it persist? - Broken/leaky water pipes',
+  leakage_walls:       'What kind of water related problems have you experienced? How long did it persist? - Overflowing sink/toilet/shower/tub/appliance',
+  leakage_windows:     'What kind of water related problems have you experienced? How long did it persist? - Leaky roof/window/door',
+  leakage_floor:       'What kind of water related problems have you experienced? How long did it persist? - Well not working',
+  cooling_central_ac:  'What type of cooling system do you use and how old is it? (check all that apply) - Central Air-conditioning',
+  cooling_window_unit: 'What type of cooling system do you use and how old is it? (check all that apply) - Window/Wall/Portable AC',
+  cooling_fan:         'What type of cooling system do you use and how old is it? (check all that apply) - Ceiling Fans',
+  cooling_none:        'What type of cooling system do you use and how old is it? (check all that apply) - No Air-conditioning',
+  cooking_method:      'What stove type do you have in your home? Please select all options that apply. - Selected Choice',
 };
 
 // Numeric-coded Qualtrics exports are decoded server-side; placeholders stay visible here as muted text.
@@ -1635,13 +1640,16 @@ function buildSurveyAnswersTab(iaqProps) {
   const friendly = (k) => k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   const props = iaqProps || {};
 
+  // The label is shown in full and never truncated: it is the survey's own
+  // question wording, so a reader must be able to select it and find that
+  // exact string in the Qualtrics export. Slicing it to 90 chars made every
+  // long question unsearchable. It wraps instead.
   const renderRow = (qLabel, cell) => {
-    const shortQ = qLabel.length > 90 ? qLabel.slice(0, 87) + '…' : qLabel;
     const valStyle = cell.muted
       ? 'max-width:42%;text-align:right;font-size:11px;color:var(--muted);font-weight:400;font-style:italic;line-height:1.35'
       : 'max-width:42%;text-align:right;font-size:11px;color:var(--text);font-weight:500;line-height:1.35';
     return `<div class="popup-row" style="align-items:flex-start;gap:8px;padding:3px 0">
-      <span class="popup-label" style="max-width:58%;font-size:10.5px;line-height:1.35;color:var(--text2);font-weight:400" title="${escapeHtml(qLabel)}">${escapeHtml(shortQ)}</span>
+      <span class="popup-label" style="max-width:58%;font-size:10.5px;line-height:1.35;color:var(--text2);font-weight:400;overflow-wrap:anywhere" title="${escapeHtml(qLabel)}">${escapeHtml(qLabel)}</span>
       <span class="popup-value" style="${valStyle}">${escapeHtml(cell.text)}</span>
     </div>`;
   };

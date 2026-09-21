@@ -93,52 +93,52 @@ EXPECTED_IAQ_COLUMNS = {
 SURVEY_QUESTIONS = {
     # ── Residency & Housing (R1–R8) ───────────────────────────────────────────
     'years_in_hre':       (27,  'QID12_TEXT', 'How long have you lived in High Ridge Estates? (years)'),
-    'reloc_factor_emp':   (29,  'QID181_1',   'Relocation factor — Employment opportunities nearby'),
-    'reloc_factor_aff':   (30,  'QID181_2',   'Relocation factor — Affordable housing'),
-    'reloc_factor_qol':   (31,  'QID181_3',   'Relocation factor — Quality of Life'),
-    'reloc_factor_fam':   (32,  'QID181_4',   'Relocation factor — Proximity to family and friends'),
-    'reloc_factor_ret':   (33,  'QID181_5',   'Relocation factor — Retirement'),
-    'reloc_factor_env':   (34,  'QID181_6',   'Relocation factor — Environmental quality and access to nature'),
-    'reloc_factor_inh':   (35,  'QID181_7',   'Relocation factor — Inherited property'),
-    'reloc_factor_oth':   (36,  'QID181_8',   'Relocation factor — Other'),
+    'reloc_factor_emp':   (29,  'QID181_1',   'If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Employment opportunities near by'),
+    'reloc_factor_aff':   (30,  'QID181_2',   'If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Affordable housing'),
+    'reloc_factor_qol':   (31,  'QID181_3',   'If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Quality of Life'),
+    'reloc_factor_fam':   (32,  'QID181_4',   'If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Proximity to family and friends'),
+    'reloc_factor_ret':   (33,  'QID181_5',   'If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Retirement'),
+    'reloc_factor_env':   (34,  'QID181_6',   'If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Environmental quality and access to nature'),
+    'reloc_factor_inh':   (35,  'QID181_7',   'If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Inherited property'),
+    'reloc_factor_oth':   (36,  'QID181_8',   'If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Other'),
     'mh_skirting':        (42,  'QID100',     'If you live in a mobile home, does your home have its skirting intact?'),
-    'anticipated_stay':   (44,  'QID47',      'How long do you anticipate continuing to live in your current house?'),
-    'safety_env':         (56,  'QID21',      'Do you feel safe in your house in terms of environmental threats (flooding, heatwaves, heavy rain/wind)?'),
-    'safety_social':      (57,  'QID194',     'Do you feel safe in your house in terms of social threats (loose pets, concerns about neighbors, etc.)?'),
-    'afford_urgency':     (58,  'QID17',      'How would you rate the urgency of having affordable housing in High Ridge Estates?'),
-    'afford_strategy':    (59,  'QID19',      'In your opinion, what is the most effective strategy to improve housing affordability in HRE?'),
+    'anticipated_stay':   (44,  'QID47',      'How long do you anticipate continuing to live in your current house? (select the most applicable choice)'),
+    'safety_env':         (56,  'QID21',      'Do you feel safe in your house in terms of environmental threats (e.g., flooding, heatwaves, heavy rain or wind)? (select the most applicable choice)'),
+    'safety_social':      (57,  'QID194',     "Do you feel safe in your house in terms of social threats (e.g., loose pets, concern about neighbor's behavior, etc.)? (select the most applicable choice)"),
+    'afford_urgency':     (58,  'QID17',      'How would you rate the urgency of having affordable housing in High Ridge Estates? (select the most applicable choice)'),
+    'afford_strategy':    (59,  'QID19',      'In your opinion, what is the most effective strategy to improve housing affordability in High Ridge Estates? (Choose up to three options) - Selected Choice'),
 
     # ── Community Living: home-resilience interventions matrix (C1, 11 items) ─
-    'intv_roof_walls':    (67,  'QID195_1',   'Intervention — Strengthen the roof and walls against severe weather'),
-    'intv_windows_doors': (68,  'QID195_2',   'Intervention — Upgrade windows and doors to be more energy-efficient'),
-    'intv_rain_gardens':  (69,  'QID195_3',   'Intervention — Install rain gardens to manage stormwater on my property'),
-    'intv_hvac':          (70,  'QID195_4',   'Intervention — Improve heating/cooling system(s)'),
-    'intv_plumbing_elec': (71,  'QID195_5',   'Intervention — Improve plumbing or electrical systems for reliability'),
-    'intv_well_septic':   (72,  'QID195_6',   'Intervention — Replace well/septic'),
-    'intv_ccua_water':    (73,  'QID195_7',   'Intervention — Connect to city water through CCUA'),
-    'intv_fence':         (74,  'QID195_8',   'Intervention — Add a fence for safety'),
-    'intv_trees_shade':   (75,  'QID195_9',   'Intervention — Plant more trees around my home for shade and cooling'),
-    'intv_trim_trees':    (76,  'QID195_10',  'Intervention — Trim trees'),
-    'intv_drainage':      (77,  'QID195_11',  'Intervention — Improved drainage'),
+    'intv_roof_walls':    (67,  'QID195_1',   "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Strengthen the roof and walls against severe weather"),
+    'intv_windows_doors': (68,  'QID195_2',   "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Upgrade windows and doors to be more energy-efficient"),
+    'intv_rain_gardens':  (69,  'QID195_3',   "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Install rain gardens to manage stormwater on my property"),
+    'intv_hvac':          (70,  'QID195_4',   "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Improve heating/cooling system(s)"),
+    'intv_plumbing_elec': (71,  'QID195_5',   "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Improve plumbing or electrical systems for reliability"),
+    'intv_well_septic':   (72,  'QID195_6',   "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Replace well/septic"),
+    'intv_ccua_water':    (73,  'QID195_7',   "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Connect to city water through CCUA"),
+    'intv_fence':         (74,  'QID195_8',   "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Add a fence for safety"),
+    'intv_trees_shade':   (75,  'QID195_9',   "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Plant more trees around my home for shade and cooling"),
+    'intv_trim_trees':    (76,  'QID195_10',  "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Trim trees"),
+    'intv_drainage':      (77,  'QID195_11',  "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Improved drainage"),
 
     # ── Community Living: experiences in HRE matrix (C2, 10 items) ────────────
-    'exp_flooding':        (84, 'QID124_1',   'Experience — Flooding of house due to any disaster (e.g., hurricane)'),
-    'exp_flood_help':      (85, 'QID124_2',   'Experience — In case of flooding, received help for cleaning'),
-    'exp_extreme_heat':    (86, 'QID124_3',   'Experience — Extreme heat in recent years'),
-    'exp_school_change':   (87, 'QID124_4',   "Experience — Changing your kids' school due to moving"),
-    'exp_law_enf':         (88, 'QID124_5',   'Experience — Calling law enforcement because of problem with neighbors'),
-    'exp_insurance_loss':  (89, 'QID124_6',   'Experience — Losing home owners insurance due to age of home'),
-    'exp_well_dry':        (90, 'QID124_7',   'Experience — Well drying up'),
-    'exp_pests':           (91, 'QID124_8',   'Experience — A problem with pests in your home'),
-    'exp_water_leaks':     (92, 'QID124_9',   'Experience — A problem with water leaks'),
-    'exp_loose_animals':   (93, 'QID124_10',  'Experience — A problem with loose animals'),
+    'exp_flooding':        (84, 'QID124_1',   "Since you've lived in High Ridge Estates, have you experienced... - Flooding of house due to any disaster such as hurricane?"),
+    'exp_flood_help':      (85, 'QID124_2',   "Since you've lived in High Ridge Estates, have you experienced... - In case of flooding experience, have you received any help for cleaning?"),
+    'exp_extreme_heat':    (86, 'QID124_3',   "Since you've lived in High Ridge Estates, have you experienced... - Extreme heat in recent years?"),
+    'exp_school_change':   (87, 'QID124_4',   "Since you've lived in High Ridge Estates, have you experienced... - Changing your kids' school due to moving?"),
+    'exp_law_enf':         (88, 'QID124_5',   "Since you've lived in High Ridge Estates, have you experienced... - Calling law enforcement because of problem with neighbors?"),
+    'exp_insurance_loss':  (89, 'QID124_6',   "Since you've lived in High Ridge Estates, have you experienced... - Losing home owners insurance due to age of home?"),
+    'exp_well_dry':        (90, 'QID124_7',   "Since you've lived in High Ridge Estates, have you experienced... - Well drying up?"),
+    'exp_pests':           (91, 'QID124_8',   "Since you've lived in High Ridge Estates, have you experienced... - A problem with pests in your home?"),
+    'exp_water_leaks':     (92, 'QID124_9',   "Since you've lived in High Ridge Estates, have you experienced... - A problem with water leaks?"),
+    'exp_loose_animals':   (93, 'QID124_10',  "Since you've lived in High Ridge Estates, have you experienced... - A problem with loose animals?"),
 
     # ── Well-being & Mobility (W1, W2) ────────────────────────────────────────
     'car_access':          (133, 'QID211',    'Do you (or your household) own or have regular access to a car?'),
-    'hurricane_transport': (134, 'QID219',    'During hurricanes/disasters, have you experienced transportation problems (e.g., difficulty evacuating)?'),
+    'hurricane_transport': (134, 'QID219',    'During disasters such as hurricanes, have you experienced transportation problems (for example, difficulty evacuating, fuel shortages, lack of access to a vehicle)? - Selected Choice'),
 
     # ── Demographics+ (D1, D2) ────────────────────────────────────────────────
-    'education':           (142, 'QID178',    'What is the highest level of education you have completed?'),
+    'education':           (142, 'QID178',    'What is the highest level of education you have completed? (select the most applicable choice)'),
     'employment':          (143, 'QID176',    'Which best describes your employment status?'),
 }
 
@@ -168,33 +168,26 @@ RELOC_FIELDS = (
 # Extra property keys written onto each IAQ feature (not in SURVEY_QUESTIONS)
 # — merged into analysis['survey_questions'] for popup labels.
 IAQ_FEATURE_POPUP_LABELS: dict[str, str] = {
-    'respiratory_ill': (
-        'How often does anyone in your home have respiratory illness symptoms?'
-    ),
-    'asthma_freq': 'How often does anyone in your home have asthma symptoms?',
-    'wheeze_freq': 'How often does anyone in your home wheeze?',
-    'headache_freq': 'How often does anyone in your home experience headaches?',
-    'tired_freq': 'How often do you feel tired or fatigued in your home?',
-    'hospital_visit': (
-        'Has anyone in your home visited a hospital for respiratory issues?'
-    ),
-    'has_mold': 'Evidence of mold in any area of the home?',
-    'year_built': 'When was your house built?',
-    'housing_type': 'What type of house do you live in?',
-    'condition': (
-        'How would you describe the condition of your current house in terms '
-        'of maintenance and repair?'
-    ),
-    'ownership': 'What is your current housing ownership status?',
-    'leakage_roof': 'Water leakage — Roof',
-    'leakage_walls': 'Water leakage — Walls',
-    'leakage_windows': 'Water leakage — Windows',
-    'leakage_floor': 'Water leakage — Floor',
-    'cooling_central_ac': 'Cooling system — Central AC',
-    'cooling_window_unit': 'Cooling system — Window unit',
-    'cooling_fan': 'Cooling system — Fan only',
-    'cooling_none': 'Cooling system — No cooling',
-    'cooking_method': 'Cooking fuel / method',
+    'respiratory_ill': 'How often has anyone living in your house experienced the following symptoms in the past year? - Respiratory illness',
+    'asthma_freq': 'How often has anyone living in your house experienced the following symptoms in the past year? - Asthma',
+    'wheeze_freq': 'How often has anyone living in your house experienced the following symptoms in the past year? - Episodes of wheezing',
+    'headache_freq': 'How often has anyone living in your house experienced the following symptoms in the past year? - Headaches',
+    'tired_freq': 'How often has anyone living in your house experienced the following symptoms in the past year? - Tiredness',
+    'hospital_visit': 'Has anyone in your home visited a hospital or any health center for respiratory health issues in the last year?',
+    'has_mold': 'Is there any evidence of mold in the following spaces?  (Check all that apply) - Selected Choice',
+    'year_built': 'When was your house built? (select the most applicable choice)\r\n\r\n*',
+    'housing_type': 'What type of house do you live in? - Selected Choice',
+    'condition': 'How would you describe the condition of your current house in terms of maintenance and repair needs? (select the most applicable choice)',
+    'ownership': 'What is your current housing ownership status? (select the most applicable choice) - Selected Choice',
+    'leakage_roof': 'What kind of water related problems have you experienced? How long did it persist? - Broken/leaky water pipes',
+    'leakage_walls': 'What kind of water related problems have you experienced? How long did it persist? - Overflowing sink/toilet/shower/tub/appliance',
+    'leakage_windows': 'What kind of water related problems have you experienced? How long did it persist? - Leaky roof/window/door',
+    'leakage_floor': 'What kind of water related problems have you experienced? How long did it persist? - Well not working',
+    'cooling_central_ac': 'What type of cooling system do you use and how old is it? (check all that apply) - Central Air-conditioning',
+    'cooling_window_unit': 'What type of cooling system do you use and how old is it? (check all that apply) - Window/Wall/Portable AC units for just one or two rooms',
+    'cooling_fan': 'What type of cooling system do you use and how old is it? (check all that apply) - Ceiling Fans',
+    'cooling_none': 'What type of cooling system do you use and how old is it? (check all that apply) - No Air-conditioning',
+    'cooking_method': 'What stove type do you have in your home? \r\nPlease select all options that apply. - Selected Choice',
 }
 
 # ── Qualtrics recode → text-label translation tables ─────────────────────────
@@ -795,6 +788,13 @@ def _val_at_orig_idx(full_row, orig_idx):
         return ''
     if v is None or _isna(v):
         return ''
+    # pandas types a numeric-recode column as float64, so str(6) is '6.0'.
+    # Recode lookup tolerates that, but a question with no label table would
+    # keep the float string and the dashboard would show '6.0' as the answer.
+    if isinstance(v, Real) and not isinstance(v, bool):
+        x = float(v)
+        if isfinite(x) and abs(x - round(x)) < 1e-9:
+            return str(int(round(x)))
     s = str(v).strip()
     return '' if s.lower() in ('nan', 'none') else s
 

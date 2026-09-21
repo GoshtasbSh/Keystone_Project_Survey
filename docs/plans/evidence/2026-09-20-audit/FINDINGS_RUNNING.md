@@ -256,3 +256,49 @@ In the May export code `3`×4 and code `4`×2. "Live with friends/family" is a h
 **Cause:** both responses geocode to the same parcel representative point (`coord_source` = `address_matched` or `parcel_exact`), i.e. two survey responses for one address — either two households on one parcel, or one household answering twice.
 
 **Fix direction:** detect coincident IAQ responses and either spiderfy them or show a "2 responses at this address" selector in the popup, the way `coincident_contacts` already handles collapsed community contacts (`api/_processing.py:1297-1311`).
+
+---
+
+## F10 (P1) — the literal string `nan` is shown to users as an answer
+
+**Seen on screen** in 45 rows across the 30 popups clicked; **167 cells** across all 110 live responses.
+
+| Field | Cells showing `nan` |
+|---|---|
+| `cooling_none` | 54 / 110 |
+| `cooling_fan` | 31 / 110 |
+| `cooling_central_ac` | 27 / 110 |
+| `cooling_window_unit` | 26 / 110 |
+| `leakage_roof` / `_walls` / `_floor` / `_windows` | 4–5 each |
+| `wheeze_freq`, `tired_freq`, `respiratory_ill`, `asthma_freq`, `headache_freq`, `cooking_method`, `housing_type` | 1–3 each |
+
+**Cause:** these fields are built with `str(_row_nr.get('Cooling System _1', '') or '')` (`api/_processing.py:2095-2103`). When pandas has parsed the empty cell as `NaN`, `NaN or ''` evaluates to `NaN` (a float is truthy), so `str()` yields `'nan'` rather than `''`. The frontend's placeholder filter (`static/js/dashboard.js:1612`) does not cover `nan`, so it renders as an ordinary answer.
+
+**Impact:** a checkbox the respondent simply did not tick is presented as though `nan` were their answer. In the cooling block this is the majority of cells.
+
+**Fix:** run these through the same NaN-safe helper the rest of the pipeline uses (`_val_at_orig_idx`, `api/_processing.py:787-799`, already returns `''` for NaN) instead of `str(... or '')`.
+
+---
+
+## F11 (P1) — the four water-leakage rows are labelled as the wrong problems
+
+The popup renders `Water leakage — Roof / Walls / Windows / Floor`. Those rows read CSV columns `Leakage 2_1..2_4` (`api/_processing.py:2095-2098`), which the survey (QSF `QID114`, and CSV row 1) defines as:
+
+| Popup label | Column read | What that column actually asks |
+|---|---|---|
+| Water leakage — **Roof** | `Leakage 2_1` | **Broken/leaky water pipes** |
+| Water leakage — **Walls** | `Leakage 2_2` | **Overflowing sink/toilet/shower/tub/appliance** |
+| Water leakage — **Windows** | `Leakage 2_3` | **Leaky roof/window/door** |
+| Water leakage — **Floor** | `Leakage 2_4` | **Well not working** |
+
+Every one of the four is mislabelled, and "Well not working" — a water-access problem, not a leak — is presented as a floor leak. A reader drawing conclusions about roof condition from this row is reading pipe data.
+
+These four also feed `_compute_iaq_score` (`api/_processing.py:764-767`), which adds +7.5 per non-empty cell. The score is unaffected by the mislabel (it counts any water problem), but the displayed attribution is wrong.
+
+**Fixed in this audit:** labels now come from the CSV column actually read (`IAQ_FEATURE_POPUP_LABELS`, and `_RAW_IAQ_LABELS` in `static/js/dashboard.js`).
+
+---
+
+## F12 (P2) — popups can open clipped off the top of the screen
+
+When a marker sits near the vertical centre at high zoom, the popup opens upward and its header is cut off by the viewport (observed at `R_1E4YReRP6XTeX06`, zoom 18.5). The reader has to pan before they can see which address they are looking at. MapLibre's popup has no auto-pan configured for this case.
