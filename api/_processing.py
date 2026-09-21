@@ -32,6 +32,8 @@ try:
         compute_struct_score as _compute_struct_score_light,
         build_validation_summary as _build_validation_summary_light,
         symptom_frequency_score,
+        qsf_labels,
+        resolve_answer_label,
     )
 except ImportError:
     from .survey_logic import (
@@ -39,6 +41,8 @@ except ImportError:
         compute_struct_score as _compute_struct_score_light,
         build_validation_summary as _build_validation_summary_light,
         symptom_frequency_score,
+        qsf_labels,
+        resolve_answer_label,
     )
 
 # ── Constants (identical to app.py) ───────────────────────────────────────────
@@ -275,10 +279,21 @@ _COLNAME_RECODE_LABELS: dict = {
                             '4': 'annually', '5': 'Never or rarely'},
     'Tired':               {'1': 'weekly', '2': 'monthly', '3': 'seasonally',
                             '4': 'annually', '5': 'Never or rarely'},
-    # Hospital Respiratory: binary Yes/No. Any code ≠ '1' treated as No.
-    'Hospital Respiratory':{'1': 'Yes', '2': 'No', '3': 'No', '4': 'No'},
-    # Ownership: 1=Owner, 2=Renter, 3=Other/Co-own
-    'Ownership':           {'1': 'Owner', '2': 'Renter', '3': 'Other'},
+    # Hospital Respiratory (QID59). Codes come from RecodeValues
+    # {'5':'1','6':'2','7':'3','8':'4'}, so 1-3 are all *Yes* variants and only
+    # 4 is No. The previous map treated any code but 1 as 'No', which recorded
+    # 16 households' respiratory hospital visits — including every emergency-
+    # room admission — as "No" and suppressed the +20 health-score penalty.
+    'Hospital Respiratory':{'1': 'Yes, Doctor visits for allergy.',
+                            '2': 'Yes, hospitalization/visiting the emergency room '
+                                 'for asthma attack.',
+                            '3': 'Yes, Others.',
+                            '4': 'No'},
+    # Ownership (QID134). RecodeValues {'1':'1','2':'2','4':'3','5':'4'}, so
+    # code 3 is 'Live with friends/family' (previously mislabelled 'Other') and
+    # code 4 is the real 'Other' (previously unmapped, rendering as a bare 4).
+    'Ownership':           {'1': 'Own', '2': 'Rent',
+                            '3': 'Live with friends/family', '4': 'Other'},
     # Cooling system TYPE (QID205, confirmed in the QSF — this question has NO
     # age dimension). It is a check-all multi-select; each "Cooling System _N"
     # column corresponds to choice N and holds that choice's recode when ticked:
@@ -429,6 +444,65 @@ def _apply_qsf_recode_labels(df_full, qid_to_col_idx: dict) -> None:
         df_full[actual_col] = df_full[actual_col].apply(
             lambda v, lm=label_map: _translate_recode_cell(v, lm)
         )
+
+
+_QID_BASE_RE = re.compile(r'^(QID\d+)')
+
+
+def _apply_qsf_display_labels(df_full, qid_to_col_idx: dict) -> dict:
+    """Rewrite every answer cell to the label the respondent actually saw.
+
+    The export writes either a recode code (numeric format) or the question's
+    VariableNaming override (text format). In this survey the overrides are
+    stale — placeholders, and in several questions text belonging to a
+    different question — so the cell text is not a trustworthy answer. This
+    maps both forms back to Choices/Answers Display via api/qsf_labels.json.
+
+    MUST run before _apply_qsf_recode_labels: those hand-written tables would
+    otherwise turn a numeric code into a label of their own (some of which are
+    wrong — QID141 inverts the condition scale) and this function would then
+    have nothing left to correct.
+
+    NOT idempotent, and deliberately so: QID192's override text 'Before 1960'
+    means choice 1 ('2000-now'), so re-running would map a correctly-resolved
+    'Before 1960' back again. Call it exactly once per upload.
+
+    Returns {column_name: n_cells_changed} for logging.
+    """
+    labels = qsf_labels()
+    if not labels:
+        return {}
+
+    # One base QID per column; prefer the most specific key (QID181_1 over
+    # QID181) so a matrix column is not translated twice.
+    col_to_qid: dict = {}
+    for qid_key, col_idx in qid_to_col_idx.items():
+        if col_idx >= len(df_full.columns):
+            continue
+        m = _QID_BASE_RE.match(str(qid_key))
+        if not m or m.group(1) not in labels:
+            continue
+        prev = col_to_qid.get(col_idx)
+        if prev is None or len(qid_key) > len(prev[0]):
+            col_to_qid[col_idx] = (qid_key, m.group(1))
+
+    changed: dict = {}
+    for col_idx, (_qid_key, base) in col_to_qid.items():
+        col = df_full.columns[col_idx]
+        original = df_full[col]
+
+        def _fix(v, b=base):
+            if v is None or _isna(v):
+                return v
+            out = resolve_answer_label(b, v)
+            return out if out is not None else v
+
+        translated = original.apply(_fix)
+        n = int((original.astype(str) != translated.astype(str)).sum())
+        if n:
+            changed[str(col)] = n
+        df_full[col] = translated
+    return changed
 
 
 # Source-question captions for every chart_id rendered in the dashboard.
@@ -1978,6 +2052,13 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
         "[iaq] Applying QSF label harmonisation "
         f"(detected_numeric_export={numeric_recode_mode})"
     )
+    # QSF-authoritative pass FIRST: map the export's recode codes and stale
+    # VariableNaming text back to what the respondent actually saw. The
+    # hand-written tables below then only see whatever this could not resolve.
+    _qsf_changed = _apply_qsf_display_labels(df_full, qid_to_col_idx)
+    print(f"[iaq] QSF label pass rewrote {sum(_qsf_changed.values())} cells "
+          f"across {len(_qsf_changed)} columns")
+
     _apply_qsf_recode_labels(df_full, qid_to_col_idx)
 
     df = df_full.copy()
@@ -2060,7 +2141,12 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
         has_mold = bool(mold_val and not _isna(mold_val) and
                         str(mold_val).strip() not in ('', 'nan'))
         ow_raw   = str(row.get('Ownership', '') or '').lower()
-        ownership = 'Owner' if 'owner' in ow_raw else ('Renter' if 'renter' in ow_raw else 'Other')
+        # Match on 'own'/'rent', not 'owner'/'renter': the QSF choice text is
+        # 'Own' / 'Rent', while the old export wrote 'Owner' / 'Renter'. Both
+        # forms have to land in the same bucket.
+        # 'Live with friends/family' is a fourth QSF choice; it stays folded
+        # into 'Other' here so the existing three-way split is unchanged.
+        ownership = 'Owner' if 'own' in ow_raw else ('Renter' if 'rent' in ow_raw else 'Other')
         raw_addr  = ' '.join(str(q212).split()) if q212 and str(q212).strip().lower() not in (
             '', 'ttt', 'nan', 'read to respondent') else ''
         # Normalise column names: strip whitespace + replace \xa0 so both
