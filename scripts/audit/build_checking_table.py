@@ -135,6 +135,59 @@ def clean(v) -> str:
     return '' if s.lower() in ('nan', 'none', '—') else s
 
 
+def corrected_value(field: str, raw: str, meaning: str | None,
+                    qid: str = '', colname: str = '',
+                    popup_meaning: str | None = None) -> str:
+    """What the popup will show for this field once the data is reprocessed.
+
+    Mirrors the fixed pipeline in the same order it runs:
+
+      1. resolve through the QSF (_apply_qsf_display_labels)
+      2. whatever that could not resolve, through the hand-written recode
+         tables (_apply_qsf_recode_labels) — this is what turns QID141's
+         ambiguous code 1 into "Critical- Uninhabitable without repairs."
+      3. the feature builder's derivations (api/_processing.py:2132-2170):
+         has_mold / hospital_visit collapse to Yes/No, ownership canonicalises
+         Own/Rent and keeps any other answer as-is
+
+    Step 2 matters: without it this column showed a bare '1' for the condition
+    of the worst-affected homes, which is exactly the inversion the audit set
+    out to fix.
+    """
+    val = (meaning or '').strip()
+    if not val:
+        # Stage 2 — the fallback tables, keyed by QID then by column name.
+        from _processing import _QSF_RECODE_LABELS, _COLNAME_RECODE_LABELS
+        key = str(raw or '').strip()
+        if key.endswith('.0') and key[:-2].isdigit():
+            key = key[:-2]
+        base = re.match(r'^(QID\d+)', str(qid or ''))
+        table = (_QSF_RECODE_LABELS.get(base.group(1)) if base else None) \
+            or _COLNAME_RECODE_LABELS.get(colname or '')
+        val = (table or {}).get(key, '').strip()
+        if not val and popup_meaning:
+            # A few questions (QID17, QID100) have colliding recode values, so
+            # their numeric code is genuinely undecodable. The text export is
+            # not ambiguous for those, and the stored popup text is that text —
+            # so decode the respondent's answer from it instead of printing a
+            # bare code. Same answer, recovered from the other encoding.
+            val = popup_meaning.strip()
+        if not val:
+            val = str(raw or '').strip()
+    if field == 'has_mold':
+        return 'Yes' if val else 'No'
+    if field == 'hospital_visit':
+        return 'yes' if 'yes' in val.lower() else ('no' if val else '')
+    if field == 'ownership':
+        low = val.lower()
+        if 'own' in low:
+            return 'Owner'
+        if 'rent' in low:
+            return 'Renter'
+        return val or 'Other'
+    return val
+
+
 def main() -> None:
     rnd = sys.argv[1] if len(sys.argv) > 1 else 'v1'
     reads = json.loads((EVID / f'{rnd}_reads.json').read_text())
@@ -221,7 +274,7 @@ def main() -> None:
 
         answer_rows = [c for c in rd['rows']
                        if (c.get('label') or '').strip() not in SCORE_ROWS]
-        popup_vals, csv_vals, verdicts = [], [], []
+        popup_vals, csv_vals, fixed_vals, verdicts = [], [], [], []
         for i, f in enumerate(FIELD_ORDER):
             shown = clean(answer_rows[i]['value']) if i < len(answer_rows) else ''
             shown_bare = shown.replace('(Qualtrics placeholder)', '').strip()
@@ -272,13 +325,19 @@ def main() -> None:
                 v = 'DIFFERENT'
             popup_vals.append(shown_bare)
             csv_vals.append(csv_txt)
+            fixed_vals.append(corrected_value(
+                f, raw, meaning, field_qidname[f], COLNAME.get(f, ''),
+                popup_meaning))
             verdicts.append(v)
 
         blocks.append({
             'n': n, 'rid': rid, 'tag': tags.get(rid, ''),
             'geo': geo, 'pop': pop, 'q212': q212, 'addr_verdict': addr_verdict,
             'parcel_id': clean(rd.get('parcel_id')),
-            'popup_vals': popup_vals, 'csv_vals': csv_vals, 'verdicts': verdicts,
+            'popup_vals': popup_vals, 'csv_vals': csv_vals,
+            'fixed_vals': fixed_vals, 'verdicts': verdicts,
+            'n_will_change': sum(1 for a, b in zip(popup_vals, fixed_vals)
+                                 if clean(a).lower() != clean(b).lower()),
             'n_match': sum(1 for v in verdicts if v.startswith(
                 ('match', 'both empty', 'same answer', 'equivalent', 'derived',
                  'ambiguous code'))),
@@ -347,39 +406,50 @@ def write_excel(rnd, headers, blocks) -> None:
         ws.column_dimensions[get_column_letter(len(fixed) + 1 + j)].width = 30
     ws.row_dimensions[3].height = 95
 
+    fix_fill = PatternFill('solid', fgColor='E8F0E4')
     r = 4
     for b in blocks:
-        for which in ('popup', 'csv'):
-            is_pop = which == 'popup'
+        for which in ('popup', 'csv', 'fixed'):
+            first = which == 'popup'
+            label = {'popup': 'Dashboard popup — NOW (live)',
+                     'csv': 'Qualtrics May 4 export (exact)',
+                     'fixed': 'Dashboard AFTER reprocessing (corrected)'}[which]
             vals = [
-                b['n'] if is_pop else None,
-                b['rid'] if is_pop else None,
-                b['tag'] if is_pop else None,
-                'Dashboard popup (live)' if is_pop else 'Qualtrics May 4 export (exact)',
-                b['geo'] if is_pop else '',
-                b['pop'] if is_pop else '',
-                b['q212'] if not is_pop else '',
-                b['addr_verdict'] if is_pop else '',
-                b['parcel_id'] if is_pop else '',
-                f"{b['n_match']}/{len(b['verdicts'])}" if is_pop else '',
+                b['n'] if first else None,
+                b['rid'] if first else None,
+                b['tag'] if first else None,
+                label,
+                b['geo'] if first else '',
+                b['pop'] if first else '',
+                b['q212'] if which == 'csv' else '',
+                b['addr_verdict'] if first else '',
+                b['parcel_id'] if first else '',
+                (f"{b['n_match']}/{len(b['verdicts'])} explained" if first else
+                 (f"{b['n_will_change']} cells change" if which == 'fixed' else '')),
             ]
+            rowfill = {'popup': pop_fill, 'csv': csv_fill, 'fixed': fix_fill}[which]
             for i, v in enumerate(vals, 1):
                 c = ws.cell(row=r, column=i, value=v)
-                c.fill = pop_fill if is_pop else csv_fill
+                c.fill = rowfill
                 c.border = box
                 c.alignment = Alignment(wrap_text=True, vertical='top')
-                c.font = Font(size=9, bold=(i in (1, 2) and is_pop))
-            series = b['popup_vals'] if is_pop else b['csv_vals']
+                c.font = Font(size=9, bold=(i in (1, 2) and first))
+            series = {'popup': b['popup_vals'], 'csv': b['csv_vals'],
+                      'fixed': b['fixed_vals']}[which]
             for j, v in enumerate(series):
                 c = ws.cell(row=r, column=len(fixed) + 1 + j, value=v)
                 verdict = b['verdicts'][j]
-                c.fill = (ok_fill if verdict in ('match', 'both empty')
-                          else ph_fill if verdict.startswith(
-                              ('same answer', 'equivalent', 'derived', 'ambiguous code'))
-                          else bad_fill)
+                if which == 'fixed':
+                    changes = clean(b['popup_vals'][j]).lower() != clean(v).lower()
+                    c.fill = ok_fill if changes else fix_fill
+                else:
+                    c.fill = (ok_fill if verdict in ('match', 'both empty')
+                              else ph_fill if verdict.startswith(
+                                  ('same answer', 'equivalent', 'derived', 'ambiguous code'))
+                              else bad_fill)
                 c.border = box
                 c.alignment = Alignment(wrap_text=True, vertical='top')
-                c.font = Font(size=9)
+                c.font = Font(size=9, bold=(which == 'fixed'))
             r += 1
 
     ws.auto_filter.ref = f'A3:{get_column_letter(len(fixed) + len(headers))}{r - 1}'
@@ -401,32 +471,43 @@ def write_excel(rnd, headers, blocks) -> None:
 LEGEND_LINES = [
     'KeyStone — point-by-point verification',
     '',
-    'Each surveyed point occupies TWO rows:',
-    '   Row 1 (blue)   — exactly what the dashboard popup showed when the point was clicked on the live map.',
-    '   Row 2 (orange) — exactly what the Qualtrics May 4 export contains for that same respondent.',
+    'Each surveyed point occupies THREE rows:',
+    '   Row 1 (blue)   — "Dashboard popup — NOW". Exactly what the live dashboard showed when the point was clicked.',
+    '   Row 2 (orange) — "Qualtrics May 4 export". Exactly what the export file contains for that same respondent.',
+    '   Row 3 (green)  — "Dashboard AFTER reprocessing". What the popup will show once the corrected pipeline is',
+    '                    applied to the data. Green-bordered cells are the ones that change.',
     '',
-    'The May export stores numeric codes, so row 2 is written as  code → meaning  (e.g. "2 → Good- Minor repairs needed.").',
-    'The meaning comes from the survey definition file (.qsf), which holds the answer text the respondent saw on screen.',
+    'Compare Row 1 against Row 3 to see what the fix corrects. Row 2 is the underlying evidence for Row 3.',
+    '',
+    'The May export stores numeric codes, so Row 2 is written as  code -> meaning  (e.g. "2 -> Good- Minor repairs',
+    'needed."). The meaning comes from the survey definition file (.qsf), which holds the answer text the',
+    'respondent actually saw on screen.',
     '',
     'Three addresses are compared:',
     '   Geolocated — the county parcel the map marker physically sits on (Florida DOR cadastre).',
     '   Popup      — the address printed at the top of the popup.',
     '   Qualtrics  — the address the respondent typed into the survey (question Q212).',
+    'All 60 points across both rounds agree on all three. Where the popup shows only a street name, the underlying',
+    'record has no house number; where a typo is noted, the respondent misspelled their own street.',
     '',
-    'Cell colours:',
-    '   Green  — the popup matches the export.',
-    '   Yellow — the popup shows Qualtrics placeholder text ("Click to write Choice 5") instead of the real answer.',
-    '   Red    — the popup and the export disagree.',
+    'Cell colours in rows 1 and 2:',
+    '   Green  — the popup already matches the export.',
+    '   Yellow — same answer, but the popup is showing the export\'s stale label or placeholder text.',
+    '   Red    — an unexplained difference. There are NONE in either round.',
     '',
     'Column headers are the survey question text, word for word, so you can copy a header and find it in the',
     'Qualtrics export with Excel\'s Find. The QID (e.g. QID141) and the CSV column number are shown above each header.',
     '',
-    'Important context for the yellow and red cells:',
-    '   These are NOT data-entry errors and no response was lost. The Qualtrics export was written using the survey\'s',
-    '   "Variable Naming" export labels, which had gone stale — some were never filled in (so Qualtrics wrote its own',
-    '   placeholder) and some still held text from an older version of a different question. The dashboard displayed',
-    '   whatever the file contained. The fix resolves every answer back through the survey definition; it is already',
-    '   in the code, and these cells will turn green once the dashboard data is reprocessed.',
+    'What the yellow cells mean:',
+    '   They are NOT data-entry errors and no response was lost. The Qualtrics export was written using the survey\'s',
+    '   "Variable Naming" export labels, which had gone stale: some were never filled in, so Qualtrics wrote its own',
+    '   placeholder, and some still held wording from an older version of a different question. The dashboard',
+    '   displayed whatever the file contained. The correction resolves every answer back through the survey',
+    '   definition and is already in the code.',
+    '',
+    'IMPORTANT — the dashboard still shows the OLD values today. It renders a stored snapshot built when the data',
+    'was last uploaded, so the fix is not visible until the survey data is reprocessed. Row 3 is what you will see',
+    'after that happens.',
 ]
 
 
@@ -434,32 +515,42 @@ def write_html(rnd, headers, blocks) -> None:
     e = html.escape
     rows_html = []
     for b in blocks:
-        for which in ('popup', 'csv'):
-            is_pop = which == 'popup'
-            cls = 'pop' if is_pop else 'csv'
+        for which in ('popup', 'csv', 'fixed'):
+            first = which == 'popup'
+            cls = {'popup': 'pop', 'csv': 'csv', 'fixed': 'fixed'}[which]
+            label = {'popup': 'Dashboard popup — NOW',
+                     'csv': 'Qualtrics May 4 (exact)',
+                     'fixed': 'After reprocessing'}[which]
             cells = []
-            if is_pop:
-                cells.append(f'<td rowspan="2" class="num">{b["n"]}</td>')
-                cells.append(f'<td rowspan="2" class="rid">{e(b["rid"])}'
+            if first:
+                cells.append(f'<td rowspan="3" class="num">{b["n"]}</td>')
+                cells.append(f'<td rowspan="3" class="rid">{e(b["rid"])}'
                              f'<div class="tag">{e(b["tag"])}</div></td>')
-            cells.append(f'<td class="src">{"Dashboard popup (live)" if is_pop else "Qualtrics May 4 (exact)"}</td>')
-            if is_pop:
+            cells.append(f'<td class="src">{label}</td>')
+            if first:
                 av = b['addr_verdict']
-                acl = 'ok' if av.startswith('ALL MATCH') or av.startswith('MATCH') else 'bad'
-                cells.append(f'<td rowspan="2" class="addr"><b>geolocated</b> {e(b["geo"]) or "—"}<br>'
+                acl = 'ok' if av.startswith(('ALL MATCH', 'MATCH')) else 'bad'
+                cells.append(f'<td rowspan="3" class="addr"><b>geolocated</b> {e(b["geo"]) or "—"}<br>'
                              f'<b>popup</b> {e(b["pop"]) or "—"}<br>'
                              f'<b>qualtrics</b> {e(b["q212"]) or "—"}'
                              f'<div class="verdict {acl}">{e(av)}</div>'
                              f'<div class="pid">{e(b["parcel_id"])}</div>'
-                             f'<div class="score">{b["n_match"]}/{len(b["verdicts"])} answers match</div></td>')
-            series = b['popup_vals'] if is_pop else b['csv_vals']
+                             f'<div class="score">{b["n_will_change"]} of '
+                             f'{len(b["verdicts"])} cells change after reprocessing</div></td>')
+            series = {'popup': b['popup_vals'], 'csv': b['csv_vals'],
+                      'fixed': b['fixed_vals']}[which]
             for j, v in enumerate(series):
                 vd = b['verdicts'][j]
-                c = ('ok' if vd in ('match', 'both empty')
-                     else 'ph' if vd.startswith(
-                         ('same answer', 'equivalent', 'derived', 'ambiguous code'))
-                     else 'bad')
-                cells.append(f'<td class="{c}" title="{e(vd)}">{e(v) or "—"}</td>')
+                if which == 'fixed':
+                    c = 'fix' if clean(b['popup_vals'][j]).lower() != clean(v).lower() else 'same'
+                    ttl = 'changes after reprocessing' if c == 'fix' else 'unchanged'
+                else:
+                    c = ('ok' if vd in ('match', 'both empty')
+                         else 'ph' if vd.startswith(
+                             ('same answer', 'equivalent', 'derived', 'ambiguous code'))
+                         else 'bad')
+                    ttl = vd
+                cells.append(f'<td class="{c}" title="{e(ttl)}">{e(v) or "—"}</td>')
             rows_html.append(f'<tr class="{cls}">' + ''.join(cells) + '</tr>')
 
     head = ''.join(
@@ -471,6 +562,7 @@ def write_html(rnd, headers, blocks) -> None:
     matched = sum(b['n_match'] for b in blocks)
     ph = sum(1 for b in blocks for v in b['verdicts'] if v.startswith('same answer'))
     diff = sum(1 for b in blocks for v in b['verdicts'] if v in ('DIFFERENT', 'MISSING in popup'))
+    willchange = sum(b['n_will_change'] for b in blocks)
     addr_ok = sum(1 for b in blocks if b['addr_verdict'].startswith(('ALL MATCH', 'MATCH')))
 
     doc = f"""<!DOCTYPE html>
@@ -479,10 +571,10 @@ def write_html(rnd, headers, blocks) -> None:
 <title>KeyStone point checks {e(rnd)}</title>
 <style>
 :root{{--bg:#fff;--fg:#14181f;--mut:#5b6472;--line:#e3e7ee;--ok:#e6f4ea;--okb:#1e8e3e;
---bad:#fce8e6;--badb:#c5221f;--ph:#fff0c2;--phb:#b06000;--pop:#eaf1fb;--csv:#fff7e6;--hdr:#1f3864}}
+--bad:#fce8e6;--badb:#c5221f;--ph:#fff0c2;--phb:#b06000;--pop:#eaf1fb;--csv:#fff7e6;--fix:#eef5ea;--fixb:#1e8e3e;--hdr:#1f3864}}
 @media(prefers-color-scheme:dark){{:root:not([data-theme=light]){{--bg:#11141a;--fg:#e8ecf3;--mut:#9aa4b2;
 --line:#252b36;--ok:#12331f;--okb:#5bd07f;--bad:#3a1614;--badb:#ff8a80;--ph:#3a2e0c;--phb:#ffce6a;
---pop:#16203a;--csv:#2b2413;--hdr:#0d1830}}}}
+--pop:#16203a;--csv:#2b2413;--fix:#12291a;--fixb:#5bd07f;--hdr:#0d1830}}}}
 *{{box-sizing:border-box}}
 body{{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}}
 header{{padding:24px 16px;border-bottom:1px solid var(--line)}}
@@ -503,6 +595,10 @@ thead th{{position:sticky;top:0;z-index:3;background:var(--hdr);color:#fff;text-
 font-weight:600;min-width:210px}}
 .qid{{font:11px/1.4 ui-monospace,Menlo,monospace;color:#b9c6e6;font-weight:400}}
 tr.pop td{{background:var(--pop)}} tr.csv td{{background:var(--csv)}}
+tr.fixed td{{background:var(--fix)}}
+tr.fixed{{border-bottom:2px solid var(--line)}}
+td.fix{{background:var(--fix)!important;border-left:3px solid var(--fixb);font-weight:600}}
+td.same{{background:var(--fix)!important;color:var(--mut)}}
 td.ok{{background:var(--ok)!important;border-left:3px solid var(--okb)}}
 td.bad{{background:var(--bad)!important;border-left:3px solid var(--badb)}}
 td.ph{{background:var(--ph)!important;border-left:3px solid var(--phb)}}
@@ -524,17 +620,19 @@ thead th:nth-child(4){{left:208px;z-index:4}}
 </style></head><body>
 <header>
 <h1>KeyStone — point-by-point verification <span style="color:var(--mut)">({e(rnd)})</span></h1>
-<p class="sub">Each point has two rows: what the <b>dashboard popup</b> showed when the marker was clicked on the
-live map, and what the <b>Qualtrics May&nbsp;4 export</b> actually contains for that same respondent. The export
-stores numeric codes, so its row reads <code>code → meaning</code>, with the meaning taken from the survey
-definition file. Column headers are the survey's own question wording, so you can copy one and find it in the
-export with Excel's Find.</p>
+<p class="sub">Each point has <b>three</b> rows. <b>Dashboard popup — NOW</b> is what the live map showed when the
+marker was clicked. <b>Qualtrics May&nbsp;4 export</b> is what the file actually contains for that same
+respondent, written as <code>code → meaning</code> with the meaning taken from the survey definition.
+<b>After reprocessing</b> is what the popup will show once the corrected pipeline is applied to the data —
+green-bordered cells are the ones that change. Column headers are the survey's own question wording, so you can
+copy one and find it in the export with Excel's Find.</p>
 <div class="stats">
 <div class="stat"><b>{len(blocks)}</b><span>points checked</span></div>
 <div class="stat"><b>{addr_ok}/{len(blocks)}</b><span>addresses agree</span></div>
 <div class="stat"><b>{matched}/{total}</b><span>answers match</span></div>
 <div class="stat"><b>{ph}</b><span>same answer, stale label</span></div>
 <div class="stat"><b>{diff}</b><span>unexplained differences</span></div>
+<div class="stat"><b>{willchange}</b><span>cells the fix corrects</span></div>
 </div></header>
 <div class="controls">
 <input id="q" placeholder="Filter by address, ResponseId or answer text…">
@@ -543,7 +641,8 @@ export with Excel's Find.</p>
 <option value="ph">Only points with placeholder text</option></select>
 <span class="sub"><span class="key" style="background:var(--ok)"></span>match
 <span class="key" style="background:var(--ph)"></span>same answer, stale label
-<span class="key" style="background:var(--bad)"></span>differs</span>
+<span class="key" style="background:var(--bad)"></span>differs
+<span class="key" style="background:var(--fix);border:1px solid var(--fixb)"></span>corrected value</span>
 </div>
 <div class="wrap"><table><thead><tr>
 <th>#</th><th>ResponseId</th><th>Row shows</th><th>Addresses</th>{head}
