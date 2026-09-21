@@ -1,0 +1,371 @@
+{
+  "affordability": {
+    "strategy": {
+      "Development of new affordable housing units": 3,
+      "Development of new affordable housing units,Other": 1,
+      "Development of new affordable housing units,Renovation and preservation of existing housing stock": 3,
+      "Development of new affordable housing units,Renovation and preservation of existing housing stock,community land trust or cooperative housing models": 1,
+      "Development of new affordable housing units,Renovation and preservation of existing housing stock,implementation of housing subsidies or vouchers": 1,
+      "Development of new affordable housing units,Renovation and preservation of existing housing stock,implementation of housing subsidies or vouchers,maintenance support for aging in place (support to the eldest residents in need of housing repair)": 1,
+      "Development of new affordable housing units,Renovation and preservation of existing housing stock,maintenance support for aging in place (support to the eldest residents in need of housing repair)": 2,
+      "Development of new affordable housing units,Renovation and preservation of existing housing stock,zoning and land use reforms to allow more diverse housing types": 4,
+      "Development of new affordable housing units,implementation of housing subsidies or vouchers,zoning and land use reforms to allow more diverse housing types,community land trust or cooperative housing models,maintenance support for aging in place (support to the eldest residents in need of housing repair)": 1,
+      "Development of new affordable housing units,implementation of housing subsidies or vouchers,zoning and land use reforms to allow more diverse housing types,maintenance support for aging in place (support to the eldest residents in need of housing repair)": 1,
+      "Development of new affordable housing units,maintenance support for aging in place (support to the eldest residents in need of housing repair)": 5,
+      "Other": 5,
+      "Renovation and preservation of existing housing stock": 10,
+      "Renovation and preservation of existing housing stock,Other": 1,
+      "Renovation and preservation of existing housing stock,community land trust or cooperative housing models,maintenance support for aging in place (support to the eldest residents in need of housing repair)": 2,
+      "Renovation and preservation of existing housing stock,implementation of housing subsidies or vouchers": 1,
+      "Renovation and preservation of existing housing stock,implementation of housing subsidies or vouchers,maintenance support for aging in place (support to the eldest residents in need of housing repair)": 6,
+      "Renovation and preservation of existing housing stock,maintenance support for aging in place (support to the eldest residents in need of housing repair)": 8,
+      "Renovation and preservation of existing housing stock,maintenance support for aging in place (support to the eldest residents in need of housing repair),Other": 1,
+      "Renovation and preservation of existing housing stock,zoning and land use reforms to allow more diverse housing types,maintenance support for aging in place (support to the eldest residents in need of housing repair)": 2,
+      "implementation of housing subsidies or vouchers,maintenance support for aging in place (support to the eldest residents in need of housing repair)": 1,
+      "implementation of housing subsidies or vouchers,zoning and land use reforms to allow more diverse housing types": 1,
+      "maintenance support for aging in place (support to the eldest residents in need of housing repair)": 2,
+      "maintenance support for aging in place (support to the eldest residents in need of housing repair),Other": 1,
+      "zoning and land use reforms to allow more diverse housing types": 1,
+      "zoning and land use reforms to allow more diverse housing types,maintenance support for aging in place (support to the eldest residents in need of housing repair)": 1
+    },
+    "urgency": {
+      "Moderately Urgent": 34,
+      "Not Urgent": 6,
+      "Slightly Urgent": 24
+    }
+  },
+  "chart_sources": {
+    "afford_strategy": "QID19 \u2014 \"What is the most effective strategy to improve housing affordability in HRE?\"",
+    "afford_urgency": "QID17 \u2014 \"How would you rate the urgency of having affordable housing in HRE?\"",
+    "anticipated_stay": "QID47 \u2014 \"How long do you anticipate continuing to live in your current house?\"",
+    "asthma_pct": "asthma \u2014 \"How often does anyone in your home have asthma symptoms?\" (Health input)",
+    "car_access": "QID211 \u2014 \"Do you (or your household) own or have regular access to a car?\"",
+    "compare_street": "mean Health, IAQ, Structural \u2014 aggregated per street (\u22653 responses)",
+    "conditions": "QID141 \u2014 \"How would you describe the condition of your current house in terms of maintenance and repair?\" (Structural input)",
+    "coord_source": "derived from geocoding tier (Q212 \u2192 parcel match / fuzzy / Census) \u2014 data-quality metric",
+    "education": "QID178 \u2014 \"What is the highest level of education you have completed?\"",
+    "employment": "QID176 \u2014 \"Which best describes your employment status?\"",
+    "experiences_pct": "QID124_1..10 matrix \u2014 % reporting each HRE experience (flooding, flood help, extreme heat, school change, law enforcement, insurance loss, well drying, pests, water leaks, loose animals). Likert 1\u20137; counts answers > scale-midpoint as positive.",
+    "hospital_pct": "Hospital Respiratory \u2014 \"Has anyone in your home visited a hospital for respiratory issues?\" (Health +20)",
+    "housing_types": "QID128 \u2014 \"What type of house do you live in?\" (Structural input)",
+    "hurricane_transport": "QID219 \u2014 \"During hurricanes/disasters, have you experienced transportation problems (e.g., difficulty evacuating)?\"",
+    "interventions_pct": "QID195_1..11 matrix \u2014 % wanting each home-resilience intervention (roof/walls, windows/doors, rain gardens, HVAC, plumbing/elec, well/septic, CCUA water, fence, trees-shade, trim trees, drainage). Likert 1\u20137; counts answers > scale-midpoint as positive.",
+    "match_rate": "derived: % of community contacts upgraded by IAQ \u2014 data-quality metric",
+    "mean_health": "composite Health: Headache + RespIll + asthma + wheeze + Tired (\u00d7weights) + Hospital Respiratory (+20)",
+    "mean_iaq": "composite IAQ: Mold + Leakage 2_1..4 + Cooling System _1..4 + Cooking",
+    "mean_risk": "derived: 0.35\u00b7Health + 0.35\u00b7IAQ + 0.30\u00b7Structural \u2014 Mean Risk composite",
+    "mean_struct": "composite Structural: QID192 (year built) + QID128 (housing type) + QID141 (condition)",
+    "mh_skirting": "QID100 \u2014 \"If you live in a mobile home, does your home have its skirting intact?\"",
+    "mold_by_street": "Mold \u2014 aggregated per street (\u22653 responses)",
+    "mold_pct": "Mold \u2014 \"Evidence of mold in any area of the home?\" (IAQ input, +30 pts)",
+    "ownership": "Ownership \u2014 \"What is your current housing ownership status?\"",
+    "reloc_factors": "QID181_1..8 matrix \u2014 relocation-factor importance (Employment / Affordability / Quality of Life / Family / Retirement / Environment / Inheritance / Other)",
+    "respiratory_pct": "RespIll \u2014 \"How often does anyone in your home have respiratory illness symptoms?\" (Health input)",
+    "risk_by_street": "composite overall_risk \u2014 aggregated per street (\u22653 responses)",
+    "risk_tiers": "derived from mean_risk \u2014 Low <34 / Medium 34\u201366 / High \u226567",
+    "safety_env": "QID21 \u2014 \"Do you feel safe in your house in terms of environmental threats (flooding, heatwaves, heavy rain/wind)?\"",
+    "safety_social": "QID194 \u2014 \"Do you feel safe in your house in terms of social threats (loose pets, concerns about neighbors, etc.)?\"",
+    "struct_by_street": "composite QID192 + QID128 + QID141 \u2014 Structural score per street (\u22653 responses)",
+    "symptoms": "symptom prevalence: RespIll + asthma + wheeze + Mold + Hospital Respiratory",
+    "unmatched": "derived: IAQ rows with no community-contact match \u2014 data-quality metric",
+    "wheeze_pct": "wheeze \u2014 \"How often does anyone in your home wheeze?\" (Health input)",
+    "year_built": "QID192 \u2014 \"When was your house built?\" (Structural input)",
+    "years_in_hre": "QID12_TEXT \u2014 \"How long have you lived in High Ridge Estates? (years)\""
+  },
+  "demographics_ext": {
+    "education": {
+      "Bachelor's Degree": 7,
+      "Graduate Degree": 4,
+      "High school diploma or equivalent": 24,
+      "Some college, no degree": 16,
+      "Vocational/Technical Licensing or Certification": 8,
+      "less than high school": 7
+    },
+    "employment": {
+      "Employed - Part time": 5,
+      "Employed- Full time": 18,
+      "Retired": 28,
+      "Unemployed": 15
+    }
+  },
+  "experiences": {
+    "highlights": [
+      "exp_law_enf",
+      "exp_insurance_loss",
+      "exp_well_dry",
+      "exp_pests",
+      "exp_water_leaks",
+      "exp_loose_animals"
+    ],
+    "order": [
+      "exp_flooding",
+      "exp_flood_help",
+      "exp_extreme_heat",
+      "exp_school_change",
+      "exp_law_enf",
+      "exp_insurance_loss",
+      "exp_well_dry",
+      "exp_pests",
+      "exp_water_leaks",
+      "exp_loose_animals"
+    ],
+    "pct_yes": {
+      "exp_extreme_heat": 57.6,
+      "exp_flood_help": 0.0,
+      "exp_flooding": 6.1,
+      "exp_insurance_loss": 15.2,
+      "exp_law_enf": 42.4,
+      "exp_loose_animals": 63.6,
+      "exp_pests": 39.4,
+      "exp_school_change": 13.6,
+      "exp_water_leaks": 30.3,
+      "exp_well_dry": 13.6
+    }
+  },
+  "geocoded": 66,
+  "health": {
+    "asthma_pct": 25.8,
+    "hospital_pct": 33.3,
+    "mold_pct": 34.8,
+    "respiratory_pct": 28.8,
+    "wheeze_pct": 30.3
+  },
+  "housing": {
+    "conditions": {
+      "Critical": 9,
+      "Fair": 16,
+      "Good": 23,
+      "Poor": 18
+    },
+    "types": {
+      "Double Wide": 27,
+      "Other": 5,
+      "Single Wide": 28,
+      "Site Built": 6
+    },
+    "year_built": {
+      "1960\u20131979": 10,
+      "1980\u20131999": 28,
+      "2000+": 10,
+      "Before 1960": 3,
+      "Unknown": 15
+    }
+  },
+  "housing_safety": {
+    "env": {
+      "Always feel safe": 35,
+      "Mostly feel safe": 15,
+      "Rarely feel safe": 1,
+      "Somewhat feel safe": 15
+    },
+    "social": {
+      "Always feel safe": 21,
+      "Mostly feel safe": 20,
+      "Never feel safe": 1,
+      "Rarely feel safe": 6,
+      "Somewhat feel safe": 18
+    }
+  },
+  "interventions": {
+    "highlights": [
+      "intv_roof_walls",
+      "intv_ccua_water"
+    ],
+    "order": [
+      "intv_roof_walls",
+      "intv_windows_doors",
+      "intv_rain_gardens",
+      "intv_hvac",
+      "intv_plumbing_elec",
+      "intv_well_septic",
+      "intv_ccua_water",
+      "intv_fence",
+      "intv_trees_shade",
+      "intv_trim_trees",
+      "intv_drainage"
+    ],
+    "pct_want": {
+      "intv_ccua_water": 22.7,
+      "intv_drainage": 37.9,
+      "intv_fence": 56.1,
+      "intv_hvac": 60.6,
+      "intv_plumbing_elec": 51.5,
+      "intv_rain_gardens": 40.9,
+      "intv_roof_walls": 51.5,
+      "intv_trees_shade": 24.2,
+      "intv_trim_trees": 60.6,
+      "intv_well_septic": 31.8,
+      "intv_windows_doors": 66.7
+    }
+  },
+  "mobility": {
+    "car_access": {
+      "na": 0,
+      "no": 9,
+      "not_sure": 0,
+      "other": 0,
+      "yes": 57
+    },
+    "hurricane_transport": {
+      "na": 0,
+      "no": 52,
+      "not_sure": 2,
+      "other": 6,
+      "yes": 6
+    }
+  },
+  "n_responses": 66,
+  "ownership": {
+    "other": 4,
+    "owner": 41,
+    "renter": 21
+  },
+  "residency": {
+    "anticipated_stay": {
+      "1-5 years": 14,
+      "1-5 years,6-10 years": 1,
+      "6-10 years": 4,
+      "Don't know": 6,
+      "Indefinitely": 37,
+      "less than 1 year": 4
+    },
+    "mh_skirting": {
+      "Not Applicable": 22,
+      "Somewhat": 44
+    },
+    "reloc_factors": {
+      "reloc_factor_aff": {
+        "Important": 19,
+        "Not important": 8,
+        "One of my key concerns": 15,
+        "Slightly important": 5,
+        "Very Important": 19
+      },
+      "reloc_factor_emp": {
+        "Important": 12,
+        "Not important": 34,
+        "One of my key concerns": 3,
+        "Slightly important": 6,
+        "Very Important": 10
+      },
+      "reloc_factor_env": {
+        "Important": 21,
+        "Not important": 11,
+        "One of my key concerns": 11,
+        "Slightly important": 7,
+        "Very Important": 15
+      },
+      "reloc_factor_fam": {
+        "Important": 15,
+        "Not important": 24,
+        "One of my key concerns": 6,
+        "Slightly important": 4,
+        "Very Important": 16
+      },
+      "reloc_factor_inh": {
+        "Important": 3,
+        "Not important": 51,
+        "One of my key concerns": 5,
+        "Slightly important": 2,
+        "Very Important": 3
+      },
+      "reloc_factor_oth": {
+        "Not important": 13,
+        "One of my key concerns": 4
+      },
+      "reloc_factor_qol": {
+        "Important": 27,
+        "Not important": 6,
+        "One of my key concerns": 6,
+        "Slightly important": 8,
+        "Very Important": 17
+      },
+      "reloc_factor_ret": {
+        "Important": 13,
+        "Not important": 29,
+        "One of my key concerns": 5,
+        "Slightly important": 10,
+        "Very Important": 7
+      }
+    },
+    "years_in_hre": {
+      "distribution": {},
+      "mean": 0,
+      "median": 0.0,
+      "n_valid": 0
+    }
+  },
+  "risk_tiers": {
+    "high": 0,
+    "low": 40,
+    "medium": 26
+  },
+  "scores": {
+    "mean_health": 26.8,
+    "mean_iaq": 21.3,
+    "mean_risk": 29.2,
+    "mean_struct": 41.2
+  },
+  "survey_questions": {
+    "afford_strategy": "In your opinion, what is the most effective strategy to improve housing affordability in High Ridge Estates? (Choose up to three options) - Selected Choice",
+    "afford_urgency": "How would you rate the urgency of having affordable housing in High Ridge Estates? (select the most applicable choice)",
+    "anticipated_stay": "How long do you anticipate continuing to live in your current house? (select the most applicable choice)",
+    "asthma_freq": "How often has anyone living in your house experienced the following symptoms in the past year? - Asthma",
+    "car_access": "Do you (or your household) own or have regular access to a car?",
+    "condition": "How would you describe the condition of your current house in terms of maintenance and repair needs? (select the most applicable choice)",
+    "cooking_method": "What stove type do you have in your home? \r\nPlease select all options that apply. - Selected Choice",
+    "cooling_central_ac": "What type of cooling system do you use and how old is it? (check all that apply) - Central Air-conditioning",
+    "cooling_fan": "What type of cooling system do you use and how old is it? (check all that apply) - Ceiling Fans",
+    "cooling_none": "What type of cooling system do you use and how old is it? (check all that apply) - No Air-conditioning",
+    "cooling_window_unit": "What type of cooling system do you use and how old is it? (check all that apply) - Window/Wall/Portable AC units for just one or two rooms",
+    "education": "What is the highest level of education you have completed? (select the most applicable choice)",
+    "employment": "Which best describes your employment status?",
+    "exp_extreme_heat": "Since you've lived in High Ridge Estates, have you experienced... - Extreme heat in recent years?",
+    "exp_flood_help": "Since you've lived in High Ridge Estates, have you experienced... - In case of flooding experience, have you received any help for cleaning?",
+    "exp_flooding": "Since you've lived in High Ridge Estates, have you experienced... - Flooding of house due to any disaster such as hurricane?",
+    "exp_insurance_loss": "Since you've lived in High Ridge Estates, have you experienced... - Losing home owners insurance due to age of home?",
+    "exp_law_enf": "Since you've lived in High Ridge Estates, have you experienced... - Calling law enforcement because of problem with neighbors?",
+    "exp_loose_animals": "Since you've lived in High Ridge Estates, have you experienced... - A problem with loose animals?",
+    "exp_pests": "Since you've lived in High Ridge Estates, have you experienced... - A problem with pests in your home?",
+    "exp_school_change": "Since you've lived in High Ridge Estates, have you experienced... - Changing your kids' school due to moving?",
+    "exp_water_leaks": "Since you've lived in High Ridge Estates, have you experienced... - A problem with water leaks?",
+    "exp_well_dry": "Since you've lived in High Ridge Estates, have you experienced... - Well drying up?",
+    "has_mold": "Is there any evidence of mold in the following spaces?  (Check all that apply) - Selected Choice",
+    "headache_freq": "How often has anyone living in your house experienced the following symptoms in the past year? - Headaches",
+    "hospital_visit": "Has anyone in your home visited a hospital or any health center for respiratory health issues in the last year?",
+    "housing_type": "What type of house do you live in? - Selected Choice",
+    "hurricane_transport": "During disasters such as hurricanes, have you experienced transportation problems (for example, difficulty evacuating, fuel shortages, lack of access to a vehicle)? - Selected Choice",
+    "intv_ccua_water": "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Connect to city water through CCUA",
+    "intv_drainage": "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Improved drainage",
+    "intv_fence": "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Add a fence for safety",
+    "intv_hvac": "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Improve heating/cooling system(s)",
+    "intv_plumbing_elec": "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Improve plumbing or electrical systems for reliability",
+    "intv_rain_gardens": "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Install rain gardens to manage stormwater on my property",
+    "intv_roof_walls": "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Strengthen the roof and walls against severe weather",
+    "intv_trees_shade": "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Plant more trees around my home for shade and cooling",
+    "intv_trim_trees": "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Trim trees",
+    "intv_well_septic": "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Replace well/septic",
+    "intv_windows_doors": "Please indicate whether you would like or would not like to have the following interventions to improve your home's resilience and quality in High Ridge Estates - Upgrade windows and doors to be more energy-efficient",
+    "leakage_floor": "What kind of water related problems have you experienced? How long did it persist? - Well not working",
+    "leakage_roof": "What kind of water related problems have you experienced? How long did it persist? - Broken/leaky water pipes",
+    "leakage_walls": "What kind of water related problems have you experienced? How long did it persist? - Overflowing sink/toilet/shower/tub/appliance",
+    "leakage_windows": "What kind of water related problems have you experienced? How long did it persist? - Leaky roof/window/door",
+    "mh_skirting": "If you live in a mobile home, does your home have its skirting intact?",
+    "ownership": "What is your current housing ownership status? (select the most applicable choice) - Selected Choice",
+    "reloc_factor_aff": "If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Affordable housing",
+    "reloc_factor_emp": "If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Employment opportunities near by",
+    "reloc_factor_env": "If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Environmental quality and access to nature",
+    "reloc_factor_fam": "If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Proximity to family and friends",
+    "reloc_factor_inh": "If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Inherited property",
+    "reloc_factor_oth": "If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Other",
+    "reloc_factor_qol": "If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Quality of Life",
+    "reloc_factor_ret": "If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Retirement",
+    "respiratory_ill": "How often has anyone living in your house experienced the following symptoms in the past year? - Respiratory illness",
+    "safety_env": "Do you feel safe in your house in terms of environmental threats (e.g., flooding, heatwaves, heavy rain or wind)? (select the most applicable choice)",
+    "safety_social": "Do you feel safe in your house in terms of social threats (e.g., loose pets, concern about neighbor's behavior, etc.)? (select the most applicable choice)",
+    "tired_freq": "How often has anyone living in your house experienced the following symptoms in the past year? - Tiredness",
+    "wheeze_freq": "How often has anyone living in your house experienced the following symptoms in the past year? - Episodes of wheezing",
+    "year_built": "When was your house built? (select the most applicable choice)\r\n\r\n*",
+    "years_in_hre": "How long have you lived in High Ridge Estates? (years)"
+  }
+}

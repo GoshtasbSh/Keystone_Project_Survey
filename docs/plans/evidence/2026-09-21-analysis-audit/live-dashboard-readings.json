@@ -1,0 +1,13 @@
+{
+  "read_at": "2026-09-21T05:24Z",
+  "source": "https://keystone-project-survey-blue.vercel.app/static",
+  "method": "signed in as the test2 admin account; values read from the rendered Analysis > Survey Results panel, not from the API",
+  "deployment": "dpl_4tQxiefirumsm5QDxsJUuJMMYyBD (Ready), alias -blue",
+  "data_untouched": {"community_contacts": 321, "field_points": 16,
+                     "iaq_responses": 110,
+                     "match_status": {"matched": 83, "completed_no_qualtric": 5, "qualtric_only": 27}},
+  "overview_tab": {"mapped": 110, "mean_risk": 33.2, "high": 2, "medium": 44, "low": 64},
+  "iaq_tab": {"mean_iaq_score": 34.8, "mold_reported_pct": 79.1,
+              "streets_with_mold": "15 of 15 analyzed"},
+  "note": "These are the values the STORED SNAPSHOT holds. They were computed before the fixes in commit 76f57db and still show the inflated mold figure (79.1%). They will change when the survey data is next reprocessed through Update Data."
+}
