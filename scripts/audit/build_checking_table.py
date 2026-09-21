@@ -96,6 +96,40 @@ def addr_key(a) -> str:
     return ' '.join(norm_addr(a).split()[:2])
 
 
+def _edit_distance(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def same_house(a: str, b: str) -> bool:
+    """Same household, allowing for how a resident actually writes an address.
+
+    The Qualtrics answer is free text, so it carries typos and spelling
+    variants — one respondent wrote "6406 bucknelle Ave" for 6406 Bucknell.
+    The house number must match exactly; the street name is allowed a small
+    edit distance so a misspelling is not reported as a different household.
+    """
+    ka, kb = addr_key(a).split(), addr_key(b).split()
+    if not ka or not kb:
+        return False
+    if ka[0] != kb[0]:                      # house number must be exact
+        return False
+    sa = ka[1] if len(ka) > 1 else ''
+    sb = kb[1] if len(kb) > 1 else ''
+    if sa == sb:
+        return True
+    if sa.startswith(sb) or sb.startswith(sa):
+        return True
+    return _edit_distance(sa, sb) <= 2
+
+
 def clean(v) -> str:
     s = re.sub(r'\s+', ' ', str(v if v is not None else '')).strip()
     return '' if s.lower() in ('nan', 'none', '—') else s
@@ -169,12 +203,19 @@ def main() -> None:
 
         geo = clean(rd.get('geolocated_address'))
         pop = clean(rd.get('popup_address'))
-        keys = [addr_key(x) for x in (geo, pop, q212) if clean(x)]
+        present = [x for x in (geo, pop, q212) if clean(x)]
         street_only = bool(pop) and not re.match(r'^\d', norm_addr(pop))
-        if len(set(keys)) <= 1 and len(keys) >= 2:
+        exact = (len({addr_key(x) for x in present}) <= 1 and len(present) >= 2)
+        # Same house allowing for the respondent's own spelling of the street.
+        agree = len(present) >= 2 and all(same_house(present[0], x) for x in present[1:])
+        typo = agree and not exact
+
+        if exact:
             addr_verdict = 'ALL MATCH'
-        elif street_only and addr_key(geo) == addr_key(q212):
+        elif street_only and same_house(geo, q212):
             addr_verdict = 'MATCH (popup shows street only)'
+        elif typo:
+            addr_verdict = 'MATCH (respondent typed a typo)'
         else:
             addr_verdict = 'CHECK'
 
@@ -213,6 +254,12 @@ def main() -> None:
             elif f in ('has_mold', 'hospital_visit'):
                 # The popup deliberately summarises a multi-select as Yes/No.
                 v = 'derived Yes/No summary'
+            elif (f == 'ownership' and shown_bare.lower() == 'other'
+                  and meaning and meaning.lower() not in ('own', 'rent')):
+                # The build that produced the stored data flattened every
+                # non-owner/renter choice to 'Other'. Now fixed in code: the
+                # real answer (e.g. 'Live with friends/family') is kept.
+                v = 'same answer (old build bucketed as Other)'
             elif PLACEHOLDER.search(shown_bare) and popup_meaning:
                 v = 'same answer (popup shows placeholder)'
             elif popup_meaning and not meaning:
