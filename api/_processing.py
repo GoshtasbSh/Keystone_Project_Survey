@@ -2140,13 +2140,24 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
         mold_val = row.get('Mold')
         has_mold = bool(mold_val and not _isna(mold_val) and
                         str(mold_val).strip() not in ('', 'nan'))
-        ow_raw   = str(row.get('Ownership', '') or '').lower()
+        ow_src   = str(row.get('Ownership', '') or '').strip()
+        ow_raw   = ow_src.lower()
         # Match on 'own'/'rent', not 'owner'/'renter': the QSF choice text is
         # 'Own' / 'Rent', while the old export wrote 'Owner' / 'Renter'. Both
-        # forms have to land in the same bucket.
-        # 'Live with friends/family' is a fourth QSF choice; it stays folded
-        # into 'Other' here so the existing three-way split is unchanged.
-        ownership = 'Owner' if 'own' in ow_raw else ('Renter' if 'rent' in ow_raw else 'Other')
+        # forms have to land in the same canonical bucket, because the map
+        # filters and the owner/renter counts test these two strings exactly.
+        #
+        # Anything else keeps the respondent's actual answer rather than being
+        # flattened to 'Other'. 'Live with friends/family' is a distinct QSF
+        # choice and a housing-insecurity signal worth seeing in the popup.
+        # Aggregates are unaffected: 'other' is derived as the remainder
+        # (n - owners - renters), never by matching the literal 'Other'.
+        if 'own' in ow_raw:
+            ownership = 'Owner'
+        elif 'rent' in ow_raw:
+            ownership = 'Renter'
+        else:
+            ownership = ow_src if ow_src and ow_raw != 'nan' else 'Other'
         raw_addr  = ' '.join(str(q212).split()) if q212 and str(q212).strip().lower() not in (
             '', 'ttt', 'nan', 'read to respondent') else ''
         # Normalise column names: strip whitespace + replace \xa0 so both

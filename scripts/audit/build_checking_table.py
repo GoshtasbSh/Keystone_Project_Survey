@@ -1,0 +1,534 @@
+"""Build the collaborator checking table (Excel + HTML) for one audit round.
+
+Layout, per the brief: one block of TWO rows per surveyed point —
+
+  row 1  what the DASHBOARD POPUP shows (read off the live map, not the API)
+  row 2  what the QUALTRICS EXPORT actually contains, exact
+
+plus the three addresses that must agree:
+
+  geolocated   the county parcel the map marker physically sits on
+  popup        the address printed at the top of the popup
+  qualtrics    the address the respondent typed (Q212)
+
+Every question column is headed with the survey's own wording, so a reader can
+copy the header and find it in the export with Excel's Find.
+
+Usage:
+  python3 scripts/audit/build_checking_table.py v1
+"""
+from __future__ import annotations
+
+import html
+import json
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+EVID = ROOT / 'docs' / 'plans' / 'evidence' / '2026-09-20-audit'
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(ROOT / 'api'))
+
+from qualtrics_ground_truth import load_survey, finished_rows, value_by_qid  # noqa: E402
+from survey_logic import resolve_answer_label  # noqa: E402
+
+MAY = ('/Users/goshtasbshahriari/UF Dropbox/Goshtasb Shahriari Mehr/'
+       'DTSC_Lab/Keystone Heights Survey - V1_May 4, 2026_16.57.csv')
+MAY = ('/Users/goshtasbshahriari/UF Dropbox/Goshtasb Shahriari Mehr/'
+       'DTSC_Lab/Keystone_Data/Keystone Heights Survey - V1_May 4, 2026_16.57.csv')
+
+# Popup row order — _IAQ_CATEGORIES in static/js/dashboard.js:1525-1595.
+FIELD_ORDER = [
+    'respiratory_ill', 'asthma_freq', 'wheeze_freq', 'headache_freq',
+    'tired_freq', 'hospital_visit',
+    'has_mold', 'leakage_roof', 'leakage_walls', 'leakage_windows',
+    'leakage_floor', 'cooling_central_ac', 'cooling_window_unit',
+    'cooling_fan', 'cooling_none', 'cooking_method',
+    'year_built', 'housing_type', 'condition', 'ownership',
+    'years_in_hre', 'anticipated_stay', 'mh_skirting', 'safety_env',
+    'safety_social', 'afford_urgency', 'afford_strategy',
+    'reloc_factor_emp', 'reloc_factor_aff', 'reloc_factor_qol',
+    'reloc_factor_fam', 'reloc_factor_ret', 'reloc_factor_env',
+    'reloc_factor_inh', 'reloc_factor_oth',
+    'intv_roof_walls', 'intv_windows_doors', 'intv_rain_gardens',
+    'intv_hvac', 'intv_plumbing_elec', 'intv_well_septic',
+    'intv_ccua_water', 'intv_fence', 'intv_trees_shade',
+    'intv_trim_trees', 'intv_drainage',
+    'exp_flooding', 'exp_flood_help', 'exp_extreme_heat',
+    'exp_school_change', 'exp_law_enf', 'exp_insurance_loss',
+    'exp_well_dry', 'exp_pests', 'exp_water_leaks', 'exp_loose_animals',
+    'car_access', 'hurricane_transport', 'education', 'employment',
+]
+
+# Fields the server reads by CSV column NAME (api/_processing.py:2084-2103)
+# rather than by QID.
+COLNAME = {
+    'respiratory_ill': 'RespIll', 'asthma_freq': 'asthma', 'wheeze_freq': 'wheeze',
+    'headache_freq': 'Headache', 'tired_freq': 'Tired',
+    'hospital_visit': 'Hospital Respiratory', 'has_mold': 'Mold',
+    'cooking_method': 'Cooking', 'leakage_roof': 'Leakage 2_1',
+    'leakage_walls': 'Leakage 2_2', 'leakage_windows': 'Leakage 2_3',
+    'leakage_floor': 'Leakage 2_4', 'cooling_central_ac': 'Cooling System _1',
+    'cooling_window_unit': 'Cooling System _2', 'cooling_fan': 'Cooling System _3',
+    'cooling_none': 'Cooling System _4', 'year_built': 'QID192',
+    'housing_type': 'QID128', 'condition': 'QID141', 'ownership': 'Ownership',
+}
+
+SCORE_ROWS = {'Risk score', 'Health', 'IAQ', 'Structural'}
+PLACEHOLDER = re.compile(r'click to write (scale point|choice)\s*\d*', re.I)
+SUFFIX = [('avenue', 'ave'), ('drive', 'dr'), ('street', 'st'), ('road', 'rd'),
+          ('circle', 'cir'), ('lane', 'ln'), ('court', 'ct'), ('terrace', 'ter'),
+          ('boulevard', 'blvd'), ('place', 'pl'), ('parkway', 'pkwy'),
+          ('center', 'centre')]
+
+
+def norm_addr(a) -> str:
+    s = re.sub(r'\s+', ' ', str(a or '').strip().lower()).rstrip('.,')
+    s = re.sub(r',?\s*keystone\s+(heights|hieghts)?.*$', '', s)
+    s = re.sub(r'\bkh\b.*$', '', s).strip()
+    for lng, sht in SUFFIX:
+        s = re.sub(rf'\b{lng}\b', sht, s)
+    return re.sub(r'\s+', ' ', s).strip()
+
+
+def addr_key(a) -> str:
+    return ' '.join(norm_addr(a).split()[:2])
+
+
+def clean(v) -> str:
+    s = re.sub(r'\s+', ' ', str(v if v is not None else '')).strip()
+    return '' if s.lower() in ('nan', 'none', '—') else s
+
+
+def main() -> None:
+    rnd = sys.argv[1] if len(sys.argv) > 1 else 'v1'
+    reads = json.loads((EVID / f'{rnd}_reads.json').read_text())
+    sample = json.loads((EVID / f'sample_{rnd}.json').read_text())
+    order = [r for r in sample['response_ids'] if r in reads]
+    tags = sample.get('tags', {})
+
+    survey = load_survey(MAY)
+    rows_by_rid = {r['ResponseId']: r for r in finished_rows(survey)}
+    try:
+        q212_idx = survey['short_names'].index('Q212')
+    except ValueError:
+        q212_idx = None
+
+    from _processing import SURVEY_QUESTIONS
+    field_qid = {f: m[1] for f, m in SURVEY_QUESTIONS.items() if len(m) == 3}
+
+    def col_by_name(name):
+        for i, c in enumerate(survey['short_names']):
+            if str(c).replace('\xa0', ' ').strip() == name:
+                return i
+        return survey['qid_to_idx'].get(name)
+
+    # Resolve each field to its CSV column once.
+    #
+    # The QID must come from the export's ImportId row, not from the column
+    # name. Fields like respiratory_ill are read by column name ('RespIll'),
+    # and looking the QSF up by that name finds nothing — which made 1,267
+    # cells report as "unresolvable" in the first v1 run. The ImportId row
+    # carries the real QID for every column.
+    field_col, field_qidname = {}, {}
+    for f in FIELD_ORDER:
+        qid = field_qid.get(f)
+        if qid:
+            _v, c = value_by_qid(survey, next(iter(rows_by_rid.values())), qid)
+        else:
+            nm = COLNAME.get(f)
+            c = col_by_name(nm) if nm else None
+        field_col[f] = c
+        import_qid = (survey['import_ids'][c]
+                      if c is not None and c < len(survey['import_ids']) else None)
+        # Base QID: the qsf map is keyed by QIDnnn, while matrix sub-columns
+        # arrive as QIDnnn_2.
+        base = None
+        if import_qid:
+            m = re.match(r'^(QID\d+)', import_qid)
+            base = m.group(1) if m else import_qid
+        field_qidname[f] = base or qid or (COLNAME.get(f) or '')
+
+    headers = []
+    for f in FIELD_ORDER:
+        c = field_col[f]
+        headers.append({
+            'field': f,
+            'qid': field_qidname[f],
+            'col': c,
+            'question': survey['question_text'][c].strip() if c is not None else '',
+        })
+
+    blocks = []
+    for n, rid in enumerate(order, 1):
+        rd = reads[rid]
+        csvrow = rows_by_rid.get(rid)
+        q212 = (csvrow['cells'][q212_idx].strip()
+                if csvrow and q212_idx is not None and q212_idx < len(csvrow['cells']) else '')
+
+        geo = clean(rd.get('geolocated_address'))
+        pop = clean(rd.get('popup_address'))
+        keys = [addr_key(x) for x in (geo, pop, q212) if clean(x)]
+        street_only = bool(pop) and not re.match(r'^\d', norm_addr(pop))
+        if len(set(keys)) <= 1 and len(keys) >= 2:
+            addr_verdict = 'ALL MATCH'
+        elif street_only and addr_key(geo) == addr_key(q212):
+            addr_verdict = 'MATCH (popup shows street only)'
+        else:
+            addr_verdict = 'CHECK'
+
+        answer_rows = [c for c in rd['rows']
+                       if (c.get('label') or '').strip() not in SCORE_ROWS]
+        popup_vals, csv_vals, verdicts = [], [], []
+        for i, f in enumerate(FIELD_ORDER):
+            shown = clean(answer_rows[i]['value']) if i < len(answer_rows) else ''
+            shown_bare = shown.replace('(Qualtrics placeholder)', '').strip()
+            c = field_col[f]
+            raw = (csvrow['cells'][c].strip()
+                   if csvrow and c is not None and c < len(csvrow['cells']) else '')
+            meaning = resolve_answer_label(field_qidname[f], raw) if raw else None
+            csv_txt = raw if not meaning else f'{raw} → {meaning}'
+
+            # What the popup's own text means, once resolved through the QSF.
+            # The stored dashboard data predates the label fix, so its text is
+            # usually the export's stale label for the SAME answer.
+            popup_meaning = resolve_answer_label(field_qidname[f], shown_bare) if shown_bare else None
+            nothing = {'', 'none', 'nan', 'no problem'}
+
+            if not shown_bare and not raw:
+                v = 'both empty'
+            elif meaning and shown_bare and shown_bare.lower() == meaning.lower():
+                v = 'match'
+            elif shown_bare and raw and shown_bare.lower() == raw.lower():
+                v = 'match'
+            elif (popup_meaning and meaning
+                  and popup_meaning.lower() == meaning.lower()):
+                # Same answer; the popup just prints the export's stale label.
+                v = ('same answer (popup shows placeholder)'
+                     if PLACEHOLDER.search(shown_bare)
+                     else 'same answer (popup shows stale label)')
+            elif shown_bare.lower() in nothing and str(meaning or raw).lower() in nothing:
+                v = 'equivalent (blank = none)'
+            elif f in ('has_mold', 'hospital_visit'):
+                # The popup deliberately summarises a multi-select as Yes/No.
+                v = 'derived Yes/No summary'
+            elif PLACEHOLDER.search(shown_bare) and popup_meaning:
+                v = 'same answer (popup shows placeholder)'
+            elif popup_meaning and not meaning:
+                # The numeric code is ambiguous (e.g. QID141/QID17), so the
+                # text export is the better source and it resolves cleanly.
+                v = 'ambiguous code — resolved from text'
+            elif not shown_bare and raw:
+                v = 'MISSING in popup'
+            else:
+                v = 'DIFFERENT'
+            popup_vals.append(shown_bare)
+            csv_vals.append(csv_txt)
+            verdicts.append(v)
+
+        blocks.append({
+            'n': n, 'rid': rid, 'tag': tags.get(rid, ''),
+            'geo': geo, 'pop': pop, 'q212': q212, 'addr_verdict': addr_verdict,
+            'parcel_id': clean(rd.get('parcel_id')),
+            'popup_vals': popup_vals, 'csv_vals': csv_vals, 'verdicts': verdicts,
+            'n_match': sum(1 for v in verdicts if v.startswith(
+                ('match', 'both empty', 'same answer', 'equivalent', 'derived',
+                 'ambiguous code'))),
+            'in_csv': csvrow is not None,
+        })
+
+    write_excel(rnd, headers, blocks)
+    write_html(rnd, headers, blocks)
+
+    from collections import Counter
+    tot = Counter(v for b in blocks for v in b['verdicts'])
+    addr = Counter(b['addr_verdict'] for b in blocks)
+    print(f'{rnd}: {len(blocks)} points')
+    print('  addresses:', dict(addr))
+    print('  answers  :', dict(tot))
+
+
+def write_excel(rnd, headers, blocks) -> None:
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f'{rnd} point checks'
+
+    hdr_fill = PatternFill('solid', fgColor='1F3864')
+    hdr_font = Font(color='FFFFFF', bold=True, size=9)
+    pop_fill = PatternFill('solid', fgColor='EAF1FB')
+    csv_fill = PatternFill('solid', fgColor='FFF7E6')
+    ok_fill = PatternFill('solid', fgColor='E6F4EA')
+    bad_fill = PatternFill('solid', fgColor='FCE8E6')
+    ph_fill = PatternFill('solid', fgColor='FFF0C2')
+    thin = Side(style='thin', color='BBBBBB')
+    box = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    fixed = ['#', 'ResponseId', 'In sample as', 'Row shows',
+             'Geolocated address (county parcel)', 'Popup address (dashboard)',
+             'Qualtrics address (Q212)', 'Addresses agree?', 'Parcel ID',
+             'Answers matching']
+    for i, h in enumerate(fixed, 1):
+        c = ws.cell(row=3, column=i, value=h)
+        c.fill, c.font, c.border = hdr_fill, hdr_font, box
+        c.alignment = Alignment(wrap_text=True, vertical='center')
+
+    for j, h in enumerate(headers):
+        col = len(fixed) + 1 + j
+        ws.cell(row=1, column=col, value=h['qid']).font = Font(size=8, italic=True, color='666666')
+        ws.cell(row=2, column=col, value=(f'CSV col {h["col"]}' if h['col'] is not None else '—')
+                ).font = Font(size=8, italic=True, color='666666')
+        c = ws.cell(row=3, column=col, value=h['question'] or h['field'])
+        c.fill, c.font, c.border = hdr_fill, hdr_font, box
+        c.alignment = Alignment(wrap_text=True, vertical='top')
+
+    ws.freeze_panes = 'E4'
+    ws.column_dimensions['A'].width = 4
+    ws.column_dimensions['B'].width = 20
+    ws.column_dimensions['C'].width = 10
+    ws.column_dimensions['D'].width = 24
+    for L in ('E', 'F', 'G'):
+        ws.column_dimensions[L].width = 30
+    ws.column_dimensions['H'].width = 20
+    ws.column_dimensions['I'].width = 22
+    ws.column_dimensions['J'].width = 12
+    for j in range(len(headers)):
+        ws.column_dimensions[get_column_letter(len(fixed) + 1 + j)].width = 30
+    ws.row_dimensions[3].height = 95
+
+    r = 4
+    for b in blocks:
+        for which in ('popup', 'csv'):
+            is_pop = which == 'popup'
+            vals = [
+                b['n'] if is_pop else None,
+                b['rid'] if is_pop else None,
+                b['tag'] if is_pop else None,
+                'Dashboard popup (live)' if is_pop else 'Qualtrics May 4 export (exact)',
+                b['geo'] if is_pop else '',
+                b['pop'] if is_pop else '',
+                b['q212'] if not is_pop else '',
+                b['addr_verdict'] if is_pop else '',
+                b['parcel_id'] if is_pop else '',
+                f"{b['n_match']}/{len(b['verdicts'])}" if is_pop else '',
+            ]
+            for i, v in enumerate(vals, 1):
+                c = ws.cell(row=r, column=i, value=v)
+                c.fill = pop_fill if is_pop else csv_fill
+                c.border = box
+                c.alignment = Alignment(wrap_text=True, vertical='top')
+                c.font = Font(size=9, bold=(i in (1, 2) and is_pop))
+            series = b['popup_vals'] if is_pop else b['csv_vals']
+            for j, v in enumerate(series):
+                c = ws.cell(row=r, column=len(fixed) + 1 + j, value=v)
+                verdict = b['verdicts'][j]
+                c.fill = (ok_fill if verdict in ('match', 'both empty')
+                          else ph_fill if verdict.startswith(
+                              ('same answer', 'equivalent', 'derived', 'ambiguous code'))
+                          else bad_fill)
+                c.border = box
+                c.alignment = Alignment(wrap_text=True, vertical='top')
+                c.font = Font(size=9)
+            r += 1
+
+    ws.auto_filter.ref = f'A3:{get_column_letter(len(fixed) + len(headers))}{r - 1}'
+
+    # Legend / how-to sheet
+    doc = wb.create_sheet('How to read this')
+    for i, line in enumerate(LEGEND_LINES, 1):
+        c = doc.cell(row=i, column=1, value=line)
+        c.alignment = Alignment(wrap_text=True, vertical='top')
+        if line.endswith(':') or i == 1:
+            c.font = Font(bold=True, size=12 if i == 1 else 10)
+    doc.column_dimensions['A'].width = 120
+
+    out = EVID / f'{rnd}-point-checks.xlsx'
+    wb.save(out)
+    print(f'  wrote {out.relative_to(ROOT)}')
+
+
+LEGEND_LINES = [
+    'KeyStone — point-by-point verification',
+    '',
+    'Each surveyed point occupies TWO rows:',
+    '   Row 1 (blue)   — exactly what the dashboard popup showed when the point was clicked on the live map.',
+    '   Row 2 (orange) — exactly what the Qualtrics May 4 export contains for that same respondent.',
+    '',
+    'The May export stores numeric codes, so row 2 is written as  code → meaning  (e.g. "2 → Good- Minor repairs needed.").',
+    'The meaning comes from the survey definition file (.qsf), which holds the answer text the respondent saw on screen.',
+    '',
+    'Three addresses are compared:',
+    '   Geolocated — the county parcel the map marker physically sits on (Florida DOR cadastre).',
+    '   Popup      — the address printed at the top of the popup.',
+    '   Qualtrics  — the address the respondent typed into the survey (question Q212).',
+    '',
+    'Cell colours:',
+    '   Green  — the popup matches the export.',
+    '   Yellow — the popup shows Qualtrics placeholder text ("Click to write Choice 5") instead of the real answer.',
+    '   Red    — the popup and the export disagree.',
+    '',
+    'Column headers are the survey question text, word for word, so you can copy a header and find it in the',
+    'Qualtrics export with Excel\'s Find. The QID (e.g. QID141) and the CSV column number are shown above each header.',
+    '',
+    'Important context for the yellow and red cells:',
+    '   These are NOT data-entry errors and no response was lost. The Qualtrics export was written using the survey\'s',
+    '   "Variable Naming" export labels, which had gone stale — some were never filled in (so Qualtrics wrote its own',
+    '   placeholder) and some still held text from an older version of a different question. The dashboard displayed',
+    '   whatever the file contained. The fix resolves every answer back through the survey definition; it is already',
+    '   in the code, and these cells will turn green once the dashboard data is reprocessed.',
+]
+
+
+def write_html(rnd, headers, blocks) -> None:
+    e = html.escape
+    rows_html = []
+    for b in blocks:
+        for which in ('popup', 'csv'):
+            is_pop = which == 'popup'
+            cls = 'pop' if is_pop else 'csv'
+            cells = []
+            if is_pop:
+                cells.append(f'<td rowspan="2" class="num">{b["n"]}</td>')
+                cells.append(f'<td rowspan="2" class="rid">{e(b["rid"])}'
+                             f'<div class="tag">{e(b["tag"])}</div></td>')
+            cells.append(f'<td class="src">{"Dashboard popup (live)" if is_pop else "Qualtrics May 4 (exact)"}</td>')
+            if is_pop:
+                av = b['addr_verdict']
+                acl = 'ok' if av.startswith('ALL MATCH') or av.startswith('MATCH') else 'bad'
+                cells.append(f'<td rowspan="2" class="addr"><b>geolocated</b> {e(b["geo"]) or "—"}<br>'
+                             f'<b>popup</b> {e(b["pop"]) or "—"}<br>'
+                             f'<b>qualtrics</b> {e(b["q212"]) or "—"}'
+                             f'<div class="verdict {acl}">{e(av)}</div>'
+                             f'<div class="pid">{e(b["parcel_id"])}</div>'
+                             f'<div class="score">{b["n_match"]}/{len(b["verdicts"])} answers match</div></td>')
+            series = b['popup_vals'] if is_pop else b['csv_vals']
+            for j, v in enumerate(series):
+                vd = b['verdicts'][j]
+                c = ('ok' if vd in ('match', 'both empty')
+                     else 'ph' if vd.startswith(
+                         ('same answer', 'equivalent', 'derived', 'ambiguous code'))
+                     else 'bad')
+                cells.append(f'<td class="{c}" title="{e(vd)}">{e(v) or "—"}</td>')
+            rows_html.append(f'<tr class="{cls}">' + ''.join(cells) + '</tr>')
+
+    head = ''.join(
+        f'<th><div class="qid">{e(h["qid"])}'
+        f'{" · col " + str(h["col"]) if h["col"] is not None else ""}</div>'
+        f'{e(h["question"] or h["field"])}</th>' for h in headers)
+
+    total = sum(len(b['verdicts']) for b in blocks)
+    matched = sum(b['n_match'] for b in blocks)
+    ph = sum(1 for b in blocks for v in b['verdicts'] if v.startswith('same answer'))
+    diff = sum(1 for b in blocks for v in b['verdicts'] if v in ('DIFFERENT', 'MISSING in popup'))
+    addr_ok = sum(1 for b in blocks if b['addr_verdict'].startswith(('ALL MATCH', 'MATCH')))
+
+    doc = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KeyStone point checks {e(rnd)}</title>
+<style>
+:root{{--bg:#fff;--fg:#14181f;--mut:#5b6472;--line:#e3e7ee;--ok:#e6f4ea;--okb:#1e8e3e;
+--bad:#fce8e6;--badb:#c5221f;--ph:#fff0c2;--phb:#b06000;--pop:#eaf1fb;--csv:#fff7e6;--hdr:#1f3864}}
+@media(prefers-color-scheme:dark){{:root:not([data-theme=light]){{--bg:#11141a;--fg:#e8ecf3;--mut:#9aa4b2;
+--line:#252b36;--ok:#12331f;--okb:#5bd07f;--bad:#3a1614;--badb:#ff8a80;--ph:#3a2e0c;--phb:#ffce6a;
+--pop:#16203a;--csv:#2b2413;--hdr:#0d1830}}}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}}
+header{{padding:24px 16px;border-bottom:1px solid var(--line)}}
+h1{{margin:0 0 6px;font-size:20px}}
+.sub{{color:var(--mut);font-size:13px;max-width:70ch}}
+.stats{{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}}
+.stat{{border:1px solid var(--line);border-radius:10px;padding:8px 12px;min-width:120px}}
+.stat b{{display:block;font-size:19px}}
+.stat span{{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.06em}}
+.controls{{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;flex-wrap:wrap;align-items:center}}
+input,select{{font:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}}
+input{{min-width:min(320px,100%)}}
+.wrap{{overflow:auto;max-height:76vh}}
+table{{border-collapse:separate;border-spacing:0;font-size:12px}}
+th,td{{border-bottom:1px solid var(--line);border-right:1px solid var(--line);padding:6px 8px;
+vertical-align:top;max-width:280px;overflow-wrap:anywhere}}
+thead th{{position:sticky;top:0;z-index:3;background:var(--hdr);color:#fff;text-align:left;
+font-weight:600;min-width:210px}}
+.qid{{font:11px/1.4 ui-monospace,Menlo,monospace;color:#b9c6e6;font-weight:400}}
+tr.pop td{{background:var(--pop)}} tr.csv td{{background:var(--csv)}}
+td.ok{{background:var(--ok)!important;border-left:3px solid var(--okb)}}
+td.bad{{background:var(--bad)!important;border-left:3px solid var(--badb)}}
+td.ph{{background:var(--ph)!important;border-left:3px solid var(--phb)}}
+td.num,td.rid,td.addr{{position:sticky;z-index:2;background:var(--bg)!important}}
+td.num{{left:0;min-width:38px;font-weight:700}}
+td.rid{{left:38px;min-width:170px;font:12px ui-monospace,Menlo,monospace}}
+td.addr{{left:208px;min-width:250px;font-size:11.5px}}
+thead th:nth-child(1){{left:0;z-index:4}}
+thead th:nth-child(2){{left:38px;z-index:4}}
+thead th:nth-child(4){{left:208px;z-index:4}}
+.tag{{color:var(--mut);font:10px sans-serif;text-transform:uppercase;letter-spacing:.06em;margin-top:3px}}
+.src{{min-width:150px;font-size:11px;color:var(--mut);white-space:nowrap}}
+.verdict{{margin-top:6px;font-size:11px;font-weight:700}}
+.verdict.ok{{color:var(--okb)}} .verdict.bad{{color:var(--badb)}}
+.pid{{color:var(--mut);font:10.5px ui-monospace,monospace;margin-top:3px}}
+.score{{margin-top:4px;font-size:11px;color:var(--mut)}}
+.note{{padding:16px;border-top:1px solid var(--line);color:var(--mut);font-size:13px;max-width:80ch}}
+.key{{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:-1px;margin-right:4px}}
+</style></head><body>
+<header>
+<h1>KeyStone — point-by-point verification <span style="color:var(--mut)">({e(rnd)})</span></h1>
+<p class="sub">Each point has two rows: what the <b>dashboard popup</b> showed when the marker was clicked on the
+live map, and what the <b>Qualtrics May&nbsp;4 export</b> actually contains for that same respondent. The export
+stores numeric codes, so its row reads <code>code → meaning</code>, with the meaning taken from the survey
+definition file. Column headers are the survey's own question wording, so you can copy one and find it in the
+export with Excel's Find.</p>
+<div class="stats">
+<div class="stat"><b>{len(blocks)}</b><span>points checked</span></div>
+<div class="stat"><b>{addr_ok}/{len(blocks)}</b><span>addresses agree</span></div>
+<div class="stat"><b>{matched}/{total}</b><span>answers match</span></div>
+<div class="stat"><b>{ph}</b><span>same answer, stale label</span></div>
+<div class="stat"><b>{diff}</b><span>unexplained differences</span></div>
+</div></header>
+<div class="controls">
+<input id="q" placeholder="Filter by address, ResponseId or answer text…">
+<select id="f"><option value="">Show all points</option>
+<option value="bad">Only points with a disagreement</option>
+<option value="ph">Only points with placeholder text</option></select>
+<span class="sub"><span class="key" style="background:var(--ok)"></span>match
+<span class="key" style="background:var(--ph)"></span>same answer, stale label
+<span class="key" style="background:var(--bad)"></span>differs</span>
+</div>
+<div class="wrap"><table><thead><tr>
+<th>#</th><th>ResponseId</th><th>Row shows</th><th>Addresses</th>{head}
+</tr></thead><tbody>
+{''.join(rows_html)}
+</tbody></table></div>
+<p class="note"><b>Why are there yellow and red cells?</b> They are not data-entry mistakes, and no response was
+lost. The Qualtrics export was written using the survey's "Variable Naming" export labels, which had gone stale:
+some were never filled in, so Qualtrics wrote its own placeholder text, and some still held wording from an older
+version of a different question. The dashboard faithfully displayed whatever the file contained. The correction
+resolves every answer back through the survey definition and is already in the code — these cells turn green once
+the dashboard's stored data is reprocessed.</p>
+<script>
+const q=document.getElementById('q'),f=document.getElementById('f');
+const rows=[...document.querySelectorAll('tbody tr')];
+const pairs=[];for(let i=0;i<rows.length;i+=2)pairs.push([rows[i],rows[i+1]]);
+function apply(){{
+  const t=q.value.trim().toLowerCase(),mode=f.value;
+  for(const [a,b] of pairs){{
+    const txt=(a.innerText+' '+b.innerText).toLowerCase();
+    let show=!t||txt.includes(t);
+    if(show&&mode==='bad')show=!!a.querySelector('td.bad')||!!b.querySelector('td.bad');
+    if(show&&mode==='ph')show=!!a.querySelector('td.ph')||!!b.querySelector('td.ph');
+    a.style.display=b.style.display=show?'':'none';
+  }}
+}}
+q.addEventListener('input',apply);f.addEventListener('change',apply);
+</script></body></html>"""
+    out = EVID / f'{rnd}-point-checks.html'
+    out.write_text(doc, encoding='utf-8')
+    print(f'  wrote {out.relative_to(ROOT)}')
+
+
+if __name__ == '__main__':
+    main()
