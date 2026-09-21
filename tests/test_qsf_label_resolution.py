@@ -84,14 +84,49 @@ def test_known_corruptions_resolve_to_the_real_answer(qid, exported, expected):
     assert resolve_answer_label(qid, exported) == expected
 
 
-def test_ambiguous_codes_are_refused_not_guessed():
-    """QID141's RecodeValues collapse choice 5 onto code 1, which choice 1 uses.
+@pytest.mark.parametrize('qid,code,expected', [
+    # QID141's RecodeValues send choice 5 to code 1, which choice 1 also uses.
+    ('QID141', '1', 'Critical- Uninhabitable without repairs.'),
+    # QID17 sends choices 3,4,5 to codes 1,2,3; choices 1,2 keep 1,2.
+    ('QID17', '1', 'Moderately Urgent'),
+    ('QID17', '2', 'Slightly Urgent'),
+    ('QID17', '3', 'Not Urgent'),
+    # QID100 sends choices 3,4 to codes 1,2.
+    ('QID100', '1', 'Somewhat'),
+    ('QID100', '2', 'Not Applicable'),
+])
+def test_colliding_codes_resolve_to_the_explicitly_recoded_choice(qid, code, expected):
+    """A code claimed by two choices belongs to the one RecodeValues names.
 
-    The resolver must decline rather than pick one. (The downstream fallback
-    table then applies the empirically-verified reading — see
-    QID141_RECODE_LABELS.)
+    An explicit RecodeValues entry is a deliberate act by the survey author; a
+    choice landing on a code only because unlisted choices recode to their own
+    key is just Qualtrics' default. So the explicit claim wins.
+
+    This is not a guess: for the 75 respondents in both the April (text) and May
+    (numeric) exports the pairing is 1:1 with no counterexample — code 1 on
+    QID141 is always "Click to write Choice 5" in the text export (11 rows),
+    QID17 code 1 is always choice 3 (36 rows) and code 2 always choice 4 (25),
+    QID100 code 1 always choice 3 (47) and code 2 always choice 4 (24).
     """
-    assert resolve_answer_label('QID141', '1') is None
+    assert resolve_answer_label(qid, code) == expected
+
+
+def test_no_colliding_codes_remain_unresolved():
+    """Every question's codes must now map to exactly one choice.
+
+    If a new questionnaire edit introduces a collision this rule cannot settle,
+    this fails rather than letting raw codes reach the dashboard.
+    """
+    stuck = {q: e['ambiguous_code'] for q, e in qsf_labels().items()
+             if e.get('ambiguous_code')}
+    assert not stuck, f'unresolvable recode collisions: {stuck}'
+
+
+def test_unknown_values_are_still_refused_not_guessed():
+    """The resolver only ever returns a real answer, never a nearest guess."""
+    assert resolve_answer_label('QID141', 'no such answer') is None
+    assert resolve_answer_label('QID141', '97') is None
+    assert resolve_answer_label('QID_does_not_exist', '1') is None
 
 
 def test_no_placeholder_text_survives_in_either_export(april, may):

@@ -105,6 +105,33 @@ def build(qsf_path: str) -> dict:
         for k in display:
             code_to_key[recodes.get(k, k)].add(k)
 
+        # A code can end up claimed by two choices: one that RecodeValues
+        # explicitly sends there, and one that lands there only because an
+        # unlisted choice recodes to its own key. Those are not equal claims.
+        # An explicit RecodeValues entry is a deliberate act by the survey
+        # author; the identity fallback is just what Qualtrics does when the
+        # author said nothing. So the explicit claim wins.
+        #
+        # This resolves all three collisions in this survey, and it agrees with
+        # the answers established from the data rather than assumed. For the 75
+        # respondents present in both the April (text) and May (numeric)
+        # exports the code↔choice pairing is 1:1 with no counterexample:
+        #   QID141 code 1 → choice 5 "Critical"      (11 responses)
+        #   QID17  code 1 → choice 3 "Moderately Urgent" (36), code 2 → choice 4 (25)
+        #   QID100 code 1 → choice 3 "Somewhat" (47), code 2 → choice 4 (24)
+        # In every case the choice Qualtrics shows is the one RecodeValues
+        # names; the colliding low-numbered choice is never chosen, because it
+        # is a retired option the live questionnaire no longer offers.
+        #
+        # The rule is also self-limiting: once RecodeValues is corrected in
+        # Qualtrics so no two choices share a code, there is no collision left
+        # for it to resolve and it never fires.
+        for code, ks in list(code_to_key.items()):
+            if len(ks) > 1:
+                explicit = {k for k in ks if k in recodes}
+                if len(explicit) == 1:
+                    code_to_key[code] = explicit
+
         out[qid] = {
             'matrix': is_matrix,
             'display': display,

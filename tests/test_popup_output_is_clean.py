@@ -50,10 +50,12 @@ RAW_FIELDS = {
     'cooking_method': 'Cooking',
 }
 
-# Questions whose recode values collide in this survey, so a NUMERIC export
-# genuinely cannot say which choice a code means. Excluded from the bare-code
-# check for numeric exports only, and reported by their own test below.
-AMBIGUOUS_IN_NUMERIC = {'afford_urgency', 'mh_skirting'}
+# Questions whose recode values collide in this survey. The collision is now
+# resolved in favour of the choice RecodeValues explicitly names (see
+# tests/test_qsf_label_resolution.py), so NOTHING is exempt any more: a numeric
+# export must decode as cleanly as a text one. Kept as an empty set so the
+# guard test below still pins the scope and fails if a new one appears.
+AMBIGUOUS_IN_NUMERIC: set[str] = set()
 
 # Free-text numeric answers: a number IS the answer.
 NUMERIC_ANSWERS = {'years_in_hre', 'years_in_hre_num'}
@@ -122,11 +124,12 @@ def test_no_bare_recode_codes_reach_the_popup(fmt, request):
 
 
 def test_ambiguous_questions_are_known_and_only_affect_numeric_exports(may, april):
-    """QID17 and QID100 collide in the numeric export — a text export is fine.
+    """No question may fall back to showing a raw recode code, in either format.
 
-    This is a survey-definition defect, not a pipeline one. The test pins the
-    exact scope so it cannot grow silently: if another question starts showing
-    raw codes, the bare-code test above fails.
+    QID17, QID100 and QID141 all have colliding RecodeValues; all three are now
+    resolved from the survey definition, so a numeric export shows real answers
+    everywhere a text export does. If a questionnaire edit introduces a
+    collision that cannot be resolved, this fails.
     """
     numeric_bare = {f for r in may for f, v in r.items()
                     if isinstance(v, str) and BARE_CODE.match(v.strip())

@@ -294,18 +294,20 @@ _COLNAME_RECODE_LABELS: dict = {
     # code 4 is the real 'Other' (previously unmapped, rendering as a bare 4).
     'Ownership':           {'1': 'Own', '2': 'Rent',
                             '3': 'Live with friends/family', '4': 'Other'},
-    # Cooling system TYPE (QID205, confirmed in the QSF — this question has NO
-    # age dimension). It is a check-all multi-select; each "Cooling System _N"
-    # column corresponds to choice N and holds that choice's recode when ticked:
-    #   1 = Central Air-conditioning, 2 = Window/Wall/Portable AC,
-    #   3 = Ceiling Fans, 4 = No Air-conditioning.
-    # (Previously these were mis-mapped to fabricated "age" labels — a misread
-    # of the questionnaire that corrupted both the cooling charts and the IAQ
-    # composite. Corrected to TYPE; scoring updated in _compute_iaq_score.)
-    'Cooling System _1':   {'1': 'Central Air-conditioning'},
-    'Cooling System _2':   {'2': 'Window/Wall AC', '1': 'Window/Wall AC'},
-    'Cooling System _3':   {'3': 'Ceiling Fans',   '1': 'Ceiling Fans'},
-    'Cooling System _4':   {'4': 'No Air-conditioning', '1': 'No Air-conditioning'},
+    # Cooling system (QID205) is deliberately NOT listed here. The question is
+    # "What type of cooling system do you use and how old is it?" — a
+    # multi-answer Likert matrix whose COLUMNS are the four system types and
+    # whose SCALE POINTS are age bands ('less than 10 years', '10 to 15 years',
+    # 'More than 15 years', "Don't know/Not applicable"). So a cell holds an
+    # AGE, and the type is given by which column it sits in.
+    #
+    # An earlier table here mapped each cell to its column's type name, on the
+    # stated belief that the question had no age dimension. The QSF says
+    # otherwise (Answers = the age bands above), so that table relabelled every
+    # respondent's age as a type name and lost the age entirely. The QSF pass in
+    # _apply_qsf_display_labels resolves these columns correctly against
+    # Answers; nothing hand-written is needed, and anything hand-written here
+    # would override it wrongly.
 }
 
 
@@ -808,43 +810,108 @@ def _freq_score(val) -> int:
     return symptom_frequency_score(val)
 
 
+def _norm_row(row) -> dict:
+    """Re-key a row so a stray trailing space or \xa0 in a Qualtrics header
+    cannot hide a column from the scorers.
+
+    _validate_iaq_columns() normalises before comparing, so it reports these
+    columns as present; a scorer reading the raw name would then silently score
+    0 with no warning anywhere. Every scorer goes through this.
+    """
+    return {str(k).replace('\xa0', ' ').strip(): v for k, v in row.items()}
+
+
 def _compute_health_score(row) -> int:
-    raw = (_freq_score(row.get('Headache')) * 0.5 +
-           _freq_score(row.get('RespIll'))  * 1.0 +
-           _freq_score(row.get('asthma'))   * 1.0 +
-           _freq_score(row.get('wheeze'))   * 0.8 +
-           _freq_score(row.get('Tired'))    * 0.3)
+    _nr = _norm_row(row)
+    raw = (_freq_score(_nr.get('Headache')) * 0.5 +
+           _freq_score(_nr.get('RespIll'))  * 1.0 +
+           _freq_score(_nr.get('asthma'))   * 1.0 +
+           _freq_score(_nr.get('wheeze'))   * 0.8 +
+           _freq_score(_nr.get('Tired'))    * 0.3)
     score = min(raw / 14.4 * 80, 80)
-    if 'yes' in str(row.get('Hospital Respiratory', '') or '').lower():
+    if 'yes' in str(_nr.get('Hospital Respiratory', '') or '').lower():
         score = min(score + 20, 100)
     return round(score)
+
+
+# The mold question (QID149) is "Is there any evidence of mold in the following
+# spaces? (Check all that apply)" and its choices are all SPACES — Kitchen,
+# Bathroom, …, plus a free-text "Other:". It offers no "no mold" option, so
+# respondents who have no mold said so in the Other box. In both exports 30 of
+# them wrote "None", "No" or "No mold".
+#
+# Treating any non-empty Mold cell as mold therefore counted those households
+# as having mold: 62 of 84 (May) instead of 28, reporting mold prevalence as
+# 73.8% when it is 33.3%, and adding +30 — a third of the whole IAQ composite —
+# to every one of them.
+_MOLD_NO_EVIDENCE = re.compile(
+    r"^(no|none|n/?a|nope|0|no mold|not that i know(\s+of)?|"
+    r"i don'?t (think so|know)|unknown|unsure)\.?$", re.I)
+
+
+def _has_mold_evidence(row_nr: dict) -> bool:
+    """True only when the respondent named a space, or described mold in Other.
+
+    A bare "Other:" is not evidence by itself — it is whatever they typed. An
+    answer that denies mold, or says they do not know, is not evidence either.
+    """
+    cell = _cell(row_nr, 'Mold')
+    if not cell:
+        return False
+    named = [p.strip() for p in cell.split(',')
+             if p.strip() and p.strip().lower().rstrip(':') != 'other']
+    if named:
+        return True
+    # Only "Other:" was ticked — the answer is in the text-entry column.
+    txt = (_cell(row_nr, 'Mold_10_TEXT') or _cell(row_nr, 'Mold_11_TEXT'))
+    return bool(txt) and not _MOLD_NO_EVIDENCE.match(txt.strip())
+
+
+# QID205 is "What type of cooling system do you use and how old is it?" — a
+# multi-answer Likert matrix whose scale points are AGE BANDS: 'less than 10
+# years', '10 to 15 years', 'More than 15 years', "Don't know/Not applicable".
+# A row therefore says the household HAS that cooling type only when it carries
+# a real age band. "Don't know/Not applicable" says nothing either way.
+#
+# Reading any non-blank row as "ticked" broke the "No Air-conditioning" row in
+# particular: 35 households scored the +4 no-A/C penalty and 29 of them had
+# reported an actual age for central or window A/C. They have air conditioning.
+_COOL_NO_AGE = ("don't know", 'dont know', 'not applicable')
+
+
+def _cool_has_age(row_nr: dict, col: str) -> bool:
+    """True when this cooling row carries a real age band."""
+    v = _cell(row_nr, col).lower()
+    return bool(v) and not any(t in v for t in _COOL_NO_AGE)
 
 
 def _compute_iaq_score(row) -> int:
     score = 0.0
     # Normalize column names: strip whitespace and replace \xa0 so both
     # 'Cooking' and 'Cooking ' (Qualtrics trailing space) resolve to the same key.
-    _nr = {str(k).replace('\xa0', ' ').strip(): v for k, v in row.items()}
-    mold = _nr.get('Mold')
-    if mold and not _isna(mold) and str(mold).strip() not in ('', 'nan'):
+    _nr = _norm_row(row)
+    if _has_mold_evidence(_nr):
         score += 30
     for col in ['Leakage 2_1', 'Leakage 2_2', 'Leakage 2_3', 'Leakage 2_4']:
+        # QID42's scale is a DURATION: 'less than one week', 'more than one
+        # week', 'not fixed', 'none'. 'none' means the problem never happened.
         val = str(_nr.get(col, '') or '').lower().strip()
         if val and val not in ('none', 'nan', ''):
             score += 7.5
-    # Cooling TYPE risk (QID205 — type, not age). Established heat/IAQ
-    # vulnerability ordering: No A/C is highest risk; window-units / fans only
-    # (no central) is moderate; central A/C is baseline. Magnitudes (+4 / +2)
-    # are unchanged from the prior model — only WHAT they score is corrected.
-    def _cool_sel(c):
-        v = str(_nr.get(c, '') or '').strip().lower()
-        return v not in ('', 'nan', 'none')
-    has_central = _cool_sel('Cooling System _1')
-    has_no_ac   = _cool_sel('Cooling System _4')
-    has_partial = _cool_sel('Cooling System _2') or _cool_sel('Cooling System _3')
-    if has_no_ac:
+    # Cooling risk. Established heat/IAQ vulnerability ordering: no A/C is
+    # highest risk; window-units / fans only (no central) is moderate; central
+    # A/C is baseline. Magnitudes (+4 / +2) are unchanged — only what counts as
+    # "has this system" is corrected (see _cool_has_age).
+    has_central = _cool_has_age(_nr, 'Cooling System _1')
+    has_window  = _cool_has_age(_nr, 'Cooling System _2')
+    has_fan     = _cool_has_age(_nr, 'Cooling System _3')
+    # The no-A/C row is the one place an age band is meaningless, so any answer
+    # there counts — but only when the household reported no actual A/C, which
+    # is what distinguishes "I have none" from "this row does not apply to me".
+    said_no_ac  = bool(_cell(_nr, 'Cooling System _4'))
+    if said_no_ac and not (has_central or has_window):
         score += 4
-    elif has_partial and not has_central:
+    elif (has_window or has_fan) and not has_central:
         score += 2
     if any(kw in str(_nr.get('Cooking', '') or '').lower() for kw in ('gas', 'propane')):
         score += 10
@@ -985,7 +1052,7 @@ def _extract_survey_extras(full_row, qid_to_col_idx: dict | None = None,
 
 
 def _compute_struct_score(row) -> int:
-    return _compute_struct_score_light(row)
+    return _compute_struct_score_light(_norm_row(row))
 
 
 # ── Address utilities (verbatim from app.py) ───────────────────────────────────
@@ -2158,9 +2225,6 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
             failed_geocodes.append(addr_str[:200])
             continue
 
-        mold_val = row.get('Mold')
-        has_mold = bool(mold_val and not _isna(mold_val) and
-                        str(mold_val).strip() not in ('', 'nan'))
         ow_src   = str(row.get('Ownership', '') or '').strip()
         ow_raw   = ow_src.lower()
         # Match on 'own'/'rent', not 'owner'/'renter': the QSF choice text is
@@ -2183,7 +2247,7 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
             '', 'ttt', 'nan', 'read to respondent') else ''
         # Normalise column names: strip whitespace + replace \xa0 so both
         # 'Cooking' and 'Cooking ' resolve to the same key (matches _nr fix).
-        _row_nr = {str(k).replace('\xa0', ' ').strip(): v for k, v in row.items()}
+        _row_nr = _norm_row(row)
 
         features.append({
             'type': 'Feature',
@@ -2200,7 +2264,7 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
                 'housing_type':       _cell(_row_nr, 'QID128'),
                 'year_built':         _cell(_row_nr, 'QID192'),
                 'condition':          _cell(_row_nr, 'QID141'),
-                'has_mold':           has_mold,
+                'has_mold':           _has_mold_evidence(_row_nr),
                 'respiratory_ill':    _cell(_row_nr, 'RespIll'),
                 'asthma_freq':        _cell(_row_nr, 'asthma'),
                 'wheeze_freq':        _cell(_row_nr, 'wheeze'),
