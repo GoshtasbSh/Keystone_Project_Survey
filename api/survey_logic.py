@@ -328,22 +328,26 @@ def lookup_parcel(index: dict, lon: float, lat: float):
 # forms back to Choices[k].Display / Answers[k].Display — what was actually on
 # screen. Anything ambiguous is left untouched rather than guessed.
 
-import json as _json
-import os as _os
-
 _QSF_LABELS: dict | None = None
 
 
 def qsf_labels() -> dict:
-    """Load and cache api/qsf_labels.json. Returns {} if it is absent."""
+    """Return the generated QSF label map, or {} if it is unavailable.
+
+    Imported rather than read from disk: a data file only ships inside a Vercel
+    function when vercel.json lists it under includeFiles, and a silently empty
+    map would turn the whole label correction into a no-op in production. An
+    imported module is always bundled.
+    """
     global _QSF_LABELS
     if _QSF_LABELS is None:
-        path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                             'qsf_labels.json')
         try:
-            with open(path, encoding='utf-8') as fh:
-                _QSF_LABELS = _json.load(fh)
-        except (OSError, ValueError):
+            try:
+                from qsf_labels import QSF_LABELS
+            except ImportError:
+                from .qsf_labels import QSF_LABELS
+            _QSF_LABELS = QSF_LABELS
+        except ImportError:
             _QSF_LABELS = {}
     return _QSF_LABELS
 

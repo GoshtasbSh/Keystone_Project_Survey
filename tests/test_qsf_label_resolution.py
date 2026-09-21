@@ -60,7 +60,7 @@ def may():
 
 def test_qsf_label_map_is_present_and_loaded():
     labels = qsf_labels()
-    assert labels, 'api/qsf_labels.json missing — run scripts/build_qsf_label_map.py'
+    assert labels, 'api/qsf_labels.py missing — run scripts/build_qsf_label_map.py'
     assert 'QID141' in labels and 'QID192' in labels
 
 

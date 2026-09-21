@@ -456,7 +456,7 @@ def _apply_qsf_display_labels(df_full, qid_to_col_idx: dict) -> dict:
     VariableNaming override (text format). In this survey the overrides are
     stale — placeholders, and in several questions text belonging to a
     different question — so the cell text is not a trustworthy answer. This
-    maps both forms back to Choices/Answers Display via api/qsf_labels.json.
+    maps both forms back to Choices/Answers Display via api/qsf_labels.py.
 
     MUST run before _apply_qsf_recode_labels: those hand-written tables would
     otherwise turn a numeric code into a label of their own (some of which are
