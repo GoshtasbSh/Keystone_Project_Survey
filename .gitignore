@@ -25,3 +25,9 @@ audit-*.png
 audit-*.md
 .playwright-mcp/
 .claude-audit/
+
+# Live-data snapshots and verification working files — contain resident PII
+# (community contacts, raw Qualtrics exports, per-response geojson).
+backups/
+verify/
+.playwright-mcp/

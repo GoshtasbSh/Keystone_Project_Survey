@@ -7,6 +7,9 @@ records each function pair and whether they match.
 | Concern | Local (`app.py`) | Vercel (`api/`) | Status |
 |---|---|---|---|
 | Qualtric CSV ingestion | `_read_qualtric_csv` + `process_iaq_survey` | `_read_qualtric_csv` in `api/_processing.py` + `process_iaq_bytes` | ✓ identical helper, same encodings, same two-row-header auto-detect |
+| QSF answer labels | ✗ **not applied** — imports only `_apply_qsf_recode_labels` | `_apply_qsf_display_labels` runs once per upload before the recode pass | ⚠️ **DIVERGED (2026-09-22)** — `app.py` still renders the export's stale `VariableNaming` ("Click to write Choice 4", "Less than 6 months" on a safety question). Affects 36 of 40 survey questions. Vercel is correct; local is not. Fix = call `_apply_qsf_display_labels` in `process_iaq_survey` before `_apply_qsf_recode_labels` (it is NOT idempotent — exactly once). |
+| Street canonicalisation | own `_build_known_streets` / `_canonicalize_street` (first-seen-wins; not re-applied after geocoding) | vote-based canonical + canonicalised after every assignment | ⚠️ **DIVERGED (2026-09-22)** — `app.py` still splits one street across spellings (`Bucknell` / `Bucknell Ave` / `BUcknell`). |
+| Multi-select aggregation | own `_bin_counts` — counts comma-joined combinations | `_multi_counts` — counts each selected option | ⚠️ **DIVERGED (2026-09-22)** — QID19 renders 28 categories locally vs 7 on Vercel. |
 | Health score | `_compute_health_score` | `_compute_health_score` (`api/_processing.py`) | ✓ identical formula |
 | IAQ score | `_compute_iaq_score` | `_compute_iaq_score` | ✓ identical (incl. `\xa0` no-break-space normalization) |
 | Structural score | `_compute_struct_score` | `_compute_struct_score` | ✓ identical |

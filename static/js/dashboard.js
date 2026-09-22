@@ -2852,13 +2852,21 @@ async function loadAnalysisMeta() {
     const meta = await res.json();
     const badge = document.getElementById('analyzed-badge');
     if (!badge) return;
-    const v = meta.contact;
+    // Show the SURVEY analysis date. Reading meta.contact here froze the
+    // badge at the last community-contact upload (Jul 21) while the survey
+    // analysis it actually labels was older (Jul 20) — so re-running the
+    // survey analysis never moved the date, and a stale Survey Results tab
+    // looked current. Contact date moved to the tooltip.
+    const fmt = (iso) => new Date(iso).toLocaleDateString(
+      'en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const v = meta.iaq || meta.contact;
     if (v) {
-      const d = new Date(v.created_at);
-      const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-      badge.textContent = `Analyzed: ${label}`;
+      badge.textContent = `Analyzed: ${fmt(v.created_at)}`;
       badge.style.display = '';
-      badge.title = v.label || '';
+      badge.title = [
+        meta.iaq     ? `Survey analysis: ${fmt(meta.iaq.created_at)} — ${meta.iaq.label || ''}` : null,
+        meta.contact ? `Community contacts: ${fmt(meta.contact.created_at)}` : null,
+      ].filter(Boolean).join('\n');
     }
   } catch {}
 }
@@ -4395,6 +4403,16 @@ function buildSurveyResultsTab(data) {
           <div class="value" style="font-size:18px;color:${(v.match_rate_pct||0)>60?'var(--green)':(v.match_rate_pct||0)>30?'var(--orange)':'var(--red)'}">${v.match_rate_pct||'—'}%</div>
           <div class="sub">${v.unmatched_iaq||0} not confirmed</div></div>
       </div>
+      ${v.dropped_no_geocode ? `
+      <div class="stat-card" style="margin-bottom:8px;border-left:3px solid var(--orange)">
+        <div class="label">Responses not charted</div>
+        <div class="value" style="font-size:18px;color:var(--orange)">${v.dropped_no_geocode}</div>
+        <div class="sub">${v.completed_in_csv} completed in the CSV &rarr; ${v.total_iaq_responses} charted
+          (${v.charted_pct_of_completed}%). Every percentage on these tabs is out of
+          ${v.total_iaq_responses}, not ${v.completed_in_csv} &mdash; these addresses could not be placed on the map.</div>
+        ${(v.dropped_addresses||[]).length ? `<div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:6px;line-height:1.6">
+          ${v.dropped_addresses.map(a=>escapeHtml(a)).join(' &middot; ')}</div>` : ''}
+      </div>` : ''}
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <div class="chart-box" style="flex:1;min-width:110px">${head('Coord Source', 'coord_source')}<canvas id="rc-coord-src" height="110"></canvas></div>
         ${v.unmatched_by_street && Object.keys(v.unmatched_by_street).length ? `
@@ -4415,7 +4433,7 @@ function buildSurveyResultsTab(data) {
         <div class="stat-card"><div class="label">Years in HRE — mean</div><div class="value" style="font-size:18px">${(residency.years_in_hre||{}).mean ?? '—'}</div><div class="sub">n=${(residency.years_in_hre||{}).n_valid||0} parsed</div></div>
         <div class="stat-card"><div class="label">Years in HRE — median</div><div class="value" style="font-size:18px">${(residency.years_in_hre||{}).median ?? '—'}</div><div class="sub">free-text → numeric</div></div>
         <div class="stat-card"><div class="label">Mobile-home skirting</div><div class="value" style="font-size:18px">${Object.values(residency.mh_skirting||{}).reduce((s,n)=>s+(n||0),0)}</div><div class="sub">responses (skip-logic)</div></div>
-        <div class="stat-card"><div class="label">Affordability strategy</div><div class="value" style="font-size:18px">${Object.keys(affordability.strategy||{}).length}</div><div class="sub">distinct answers</div></div>
+        <div class="stat-card"><div class="label">Affordability strategy</div><div class="value" style="font-size:18px">${Object.keys(affordability.strategy||{}).length}</div><div class="sub">options chosen</div></div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
         <div class="chart-box" style="flex:1;min-width:200px">${head('Years lived in HRE — distribution', 'years_in_hre')}<canvas id="rc-residency-years" height="120"></canvas><div class="chart-source">Source: ${escapeHtml(surveyQs.years_in_hre || 'How long have you lived in High Ridge Estates?')}</div></div>

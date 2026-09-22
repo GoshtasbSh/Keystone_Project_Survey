@@ -17,7 +17,7 @@ import logging
 import difflib
 import urllib.request
 import urllib.parse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date
 from math import radians, sin, cos, sqrt, atan2, isfinite
 from numbers import Integral, Real
@@ -846,7 +846,29 @@ def _compute_health_score(row) -> int:
 # to every one of them.
 _MOLD_NO_EVIDENCE = re.compile(
     r"^(no|none|n/?a|nope|0|no mold|not that i know(\s+of)?|"
-    r"i don'?t (think so|know)|unknown|unsure)\.?$", re.I)
+    r"(i\s+)?don'?t (think so|know)|unknown|unsure|"
+    # Respondents wrote these verbatim and each one means "no mold", but the
+    # pattern used to miss all three and score them +30 on the IAQ index:
+    # a typo ('N0o'), a phrasing ('No where visable'), and a bare "Don't
+    # know" with no leading "I".
+    r"no\s*where\s+vis[ai]ble|nowhere\s+vis[ai]ble|"
+    r"(none|not)\s+vis[ai]ble)\.?$", re.I)
+
+
+def _mold_text_denies(txt: str) -> bool:
+    """True when the Other free text denies mold or admits not knowing.
+
+    Normalises a zero typed for the letter o ('N0o' -> 'noo') before
+    matching, so an obvious slip is not read as evidence of mold.
+    """
+    t = re.sub(r'\s+', ' ', str(txt or '')).strip()
+    if not t:
+        return True
+    if _MOLD_NO_EVIDENCE.match(t):
+        return True
+    squashed = re.sub(r'(?<=[a-z])0(?=[a-z])', 'o', t, flags=re.I)
+    squashed = re.sub(r'(.)\1+', r'\1', squashed)     # 'noo' -> 'no'
+    return bool(_MOLD_NO_EVIDENCE.match(squashed))
 
 
 def _has_mold_evidence(row_nr: dict) -> bool:
@@ -864,7 +886,7 @@ def _has_mold_evidence(row_nr: dict) -> bool:
         return True
     # Only "Other:" was ticked — the answer is in the text-entry column.
     txt = (_cell(row_nr, 'Mold_10_TEXT') or _cell(row_nr, 'Mold_11_TEXT'))
-    return bool(txt) and not _MOLD_NO_EVIDENCE.match(txt.strip())
+    return not _mold_text_denies(txt)
 
 
 # QID205 is "What type of cooling system do you use and how old is it?" — a
@@ -1142,11 +1164,28 @@ def _build_contact_lookup(contact_features: list) -> dict:
 
 
 def _build_known_streets(contact_lookup: dict) -> dict:
-    known = {}
+    """One canonical spelling per street core.
+
+    First-seen-wins used to decide this, so a typo that happened to come
+    first ('BUcknell') could become the canonical name for the whole
+    street. Pick by vote instead: most frequent spelling, then the one
+    carrying a suffix ('Bucknell Ave' over 'Bucknell'), then proper
+    casing. Ties break on the name itself so the result is deterministic.
+    """
+    variants: dict = defaultdict(Counter)
     for (_house_num, s_core), (_lon, _lat, addr) in contact_lookup.items():
         canonical = _extract_street_name(addr)
-        if canonical and s_core and s_core not in known:
-            known[s_core] = canonical
+        if canonical and s_core:
+            variants[s_core][canonical] += 1
+
+    known = {}
+    for s_core, counts in variants.items():
+        known[s_core] = max(counts.items(), key=lambda kv: (
+            kv[1],                                    # most frequent
+            len(_street_core(kv[0])) < len(kv[0]),    # keeps a suffix
+            kv[0][:1].isupper() and not kv[0].isupper(),  # Title-ish casing
+            kv[0],                                    # deterministic tiebreak
+        ))[0]
     return known
 
 
@@ -1162,7 +1201,17 @@ def _canonicalize_street(name: str, known_streets: dict, threshold: float = 0.85
         if score > best_score:
             best_score = score
             best_name = canonical
-    return best_name if best_score >= threshold else name
+    if best_score >= threshold:
+        return best_name
+    # No contact address on this street, so there is nothing to match
+    # against and the respondent's own spelling stands — which left
+    # 'Wesleyan Rd' and 'wesleyan Rd' as two streets. Normalise the
+    # casing so they land on the same row. Only touch words that are
+    # entirely lower or entirely upper, so 'McKinley' keeps its shape.
+    return ' '.join(
+        w.capitalize() if (w.islower() or w.isupper()) else w
+        for w in re.sub(r'\s+', ' ', name).strip().split()
+    ) or name
 
 
 def _address_match(q212: str, lookup: dict) -> tuple:
@@ -1689,6 +1738,34 @@ def _compute_iaq_analysis(features: list) -> dict:
                 c[v] += 1
         return dict(c)
 
+    def _multi_counts(field, qid):
+        """Count each SELECTED OPTION of a multi-select, not each combination.
+
+        Qualtrics joins a multi-select with commas, so counting raw cells
+        made every combination its own category: QID19 ("choose up to
+        three") produced 28 categories for 7 options, crammed the y-axis
+        to ~5px a bar, and made "how many want renovation?" unanswerable
+        because that option was spread over a dozen rows.
+
+        Splitting on commas alone would shred options whose own text
+        contains one, so split only on separators between known choices.
+        """
+        entry = (qsf_labels() or {}).get(qid) or {}
+        choices = sorted((entry.get('display') or {}).values(), key=len, reverse=True)
+        c: dict = defaultdict(int)
+        for p in props:
+            v = str(p.get(field, '') or '').strip()
+            if not v:
+                continue
+            rest, found = v, []
+            for choice in choices:          # longest first: no partial eats a longer one
+                if choice and choice in rest:
+                    found.append(choice)
+                    rest = rest.replace(choice, '', 1)
+            for part in (found or [s.strip() for s in v.split(',') if s.strip()]):
+                c[part] += 1
+        return dict(c)
+
     def _yes_no_counts(field):
         """Normalize Yes/No/Not Sure (case-insensitive) into a fixed-shape dict.
         Anything else non-empty → 'other'; empty → 'na'."""
@@ -1867,7 +1944,7 @@ def _compute_iaq_analysis(features: list) -> dict:
         },
         'affordability': {
             'urgency':  _bin_counts('afford_urgency'),
-            'strategy': _bin_counts('afford_strategy'),
+            'strategy': _multi_counts('afford_strategy', 'QID19'),
         },
 
         # ── Community Living (C1, C2) ─────────────────────────────────────────
@@ -2266,6 +2343,16 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
         # 'Cooking' and 'Cooking ' resolve to the same key (matches _nr fix).
         _row_nr = _norm_row(row)
 
+        # Canonicalise LAST. The geocoding branches above re-derive
+        # street_name straight from the matched contact address, which
+        # carries that list's own spellings — so 'Bucknell', 'Bucknell
+        # Ave', 'BUcknell' and 'bucknell' all reached street_stats as
+        # separate streets, splitting one street's respondents across
+        # four rows and printing it twice on the same axis. Running the
+        # canonicaliser after every assignment is what makes per-street
+        # aggregation count a street once.
+        street_name = _canonicalize_street(street_name, known_streets)
+
         features.append({
             'type': 'Feature',
             'geometry': {'type': 'Point', 'coordinates': coords},
@@ -2349,6 +2436,17 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
     analysis['input_format'] = 'numeric_recode' if numeric_recode_mode else 'text_labels'
     analysis['recode_translation_applied'] = True
     analysis['validation'] = _build_validation_summary(features, contact_features)
+    # Every chart is computed over the responses we could place on the map, so
+    # a response whose address will not geocode is excluded from all of them.
+    # 'total_iaq_responses' counts only those survivors, which made the panel
+    # read as though the dropped rows never existed — ~12% of completed
+    # responses on both the April and May exports. Report the intake figure
+    # alongside it so the denominator is visible rather than implied.
+    analysis['validation']['completed_in_csv']    = int(len(df_full))
+    analysis['validation']['dropped_no_geocode']  = int(len(df_full) - len(features))
+    analysis['validation']['dropped_addresses']   = [str(a)[:120] for a in failed_geocodes[:25]]
+    analysis['validation']['charted_pct_of_completed'] = (
+        round(len(features) / len(df_full) * 100, 1) if len(df_full) else 0.0)
     print(f"[iaq-debug] pct_want sample: { {k: v for k, v in (analysis.get('interventions') or {}).get('pct_want', {}).items()} }")
     print(f"[iaq-debug] pct_yes sample:  { {k: v for k, v in (analysis.get('experiences') or {}).get('pct_yes', {}).items()} }")
     # Store QID map summary in analysis for dashboard-visible diagnostics
