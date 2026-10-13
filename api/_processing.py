@@ -2072,6 +2072,29 @@ def categorize(text) -> str:
 
 # ── Main processing functions ──────────────────────────────────────────────────
 
+# Qualtrics response Status. Numeric exports write the code, text exports the
+# label. 0 'IP Address' and 4 'Imported' are real responses; 16 'Offline' is
+# the field tablets' offline app (92 of the October responses) and is real.
+_TEST_STATUS_CODES = frozenset({'1', '2', '8', '9', '17'})
+_TEST_STATUS_LABELS = frozenset({
+    'survey preview', 'survey test', 'spam', 'survey preview spam',
+    'preview spam', 'offline survey preview', 'offline preview',
+})
+
+
+def _is_test_response(raw) -> 'pd.Series':
+    """Boolean mask: rows that are Qualtrics previews, tests or spam."""
+    mask = pd.Series(False, index=raw.index)
+    if 'Status' in raw.columns:
+        st = raw['Status'].map(_normalize_qualtrics_recode_key)
+        st = st.fillna('').astype(str).str.strip()
+        mask |= st.isin(_TEST_STATUS_CODES) | st.str.lower().isin(_TEST_STATUS_LABELS)
+    if 'DistributionChannel' in raw.columns:
+        mask |= (raw['DistributionChannel'].fillna('').astype(str)
+                 .str.strip().str.lower() == 'preview')
+    return mask
+
+
 def _read_qualtric_csv(file_bytes: bytes):
     """
     Read a Qualtric CSV with encoding auto-detection and tolerant header handling.
@@ -2214,6 +2237,14 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
 
     _fin = raw['Finished'].astype(str).str.strip().str.lower()
     _mask = _fin.isin(['true', '1'])
+    # Qualtrics previews / tests / spam are not respondents. They used to be
+    # dropped only by luck (blank or 'ttt' address) and still inflated the
+    # completed count (129 instead of 126). Status 16 = offline app: KEEP.
+    _test_mask = _is_test_response(raw)
+    excluded_test_ids = [
+        str(v) for v in raw.loc[_mask & _test_mask, 'ResponseId'].tolist()
+    ] if 'ResponseId' in raw.columns else []
+    _mask = _mask & ~_test_mask
     # df_full keeps every column (incl. PII + blank/duplicate-named matrix
     # columns) so we can index by ORIGINAL CSV position for SURVEY_QUESTIONS.
     # df strips PII columns and is what existing name-based code reads.
@@ -2223,7 +2254,8 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
               f"{list(raw['Finished'].astype(str).unique()[:8])}")
         raise ValueError(
             "No completed responses found in the CSV. "
-            "Only rows where Finished='True' or Finished=1 are processed."
+            "Only rows where Finished='True' or Finished=1 are processed, "
+            "and Qualtrics preview/test/spam responses are excluded."
         )
 
     # Auto-detect upload structure:
@@ -2443,6 +2475,8 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
     # responses on both the April and May exports. Report the intake figure
     # alongside it so the denominator is visible rather than implied.
     analysis['validation']['completed_in_csv']    = int(len(df_full))
+    analysis['validation']['excluded_test_responses'] = len(excluded_test_ids)
+    analysis['validation']['excluded_test_ids']   = excluded_test_ids[:25]
     analysis['validation']['dropped_no_geocode']  = int(len(df_full) - len(features))
     analysis['validation']['dropped_addresses']   = [str(a)[:120] for a in failed_geocodes[:25]]
     analysis['validation']['charted_pct_of_completed'] = (
