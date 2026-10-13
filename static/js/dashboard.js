@@ -2534,6 +2534,19 @@ function selectSearchResult(entry) {
   document.getElementById('search-results')?.classList.remove('show');
   applyFilters();
   _showSearchHit(entry);
+  // Survey-only (flyer/QR) points live on the Qualtric survey layer, which
+  // starts hidden — switch it on when a survey point sits at this house so
+  // the searched household is never invisible.
+  const [lon0, lat0] = entry.coords;
+  const surveyHere = (iaqData?.features || []).some(f => {
+    const c = f.geometry?.coordinates;
+    return c && Math.hypot((c[0] - lon0) * 96000, (c[1] - lat0) * 111000) < 40;
+  });
+  const iaqToggle = document.getElementById('layer-iaq');
+  if (surveyHere && iaqToggle && !iaqToggle.checked) {
+    iaqToggle.checked = true;
+    if (typeof _setIaqVisibility === 'function') _setIaqVisibility(true);
+  }
   map.flyTo({ center: entry.coords, zoom: Math.max(map.getZoom(), 18.5), duration: 900 });
 }
 
