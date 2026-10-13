@@ -25,3 +25,19 @@ test('the specific hospital choice is listed under Health', () => {
 test('skirting card no longer claims skip-logic (all 114 answered)', () => {
   assert.ok(!src.includes('responses (skip-logic)'));
 });
+
+test('every stored free-text field has a place in the popup', () => {
+  const expected = {
+    mold_locations: 'Indoor Air Quality',
+    mold_other: 'Indoor Air Quality',
+    cooking_other: 'Indoor Air Quality',
+    housing_type_other: 'Structural & Housing Type',
+    ownership_other: 'Structural & Housing Type',
+    afford_strategy_other: 'Residency & Affordability',
+    reloc_factor_oth_text: 'Relocation Factors',
+    hurricane_transport_other: 'Well-being & Mobility',
+  };
+  for (const [k, title] of Object.entries(expected)) {
+    assert.equal(categoryOf(k), title, `${k} should render under ${title}`);
+  }
+});

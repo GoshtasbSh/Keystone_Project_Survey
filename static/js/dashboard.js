@@ -1588,23 +1588,23 @@ const _IAQ_CATEGORIES = [
     'hospital_visit', 'hospital_visit_detail',
   ]],
   ['Indoor Air Quality', [
-    'has_mold',
+    'has_mold', 'mold_locations', 'mold_other',
     'leakage_roof', 'leakage_walls', 'leakage_windows', 'leakage_floor',
     'cooling_central_ac', 'cooling_window_unit', 'cooling_fan', 'cooling_none',
-    'cooking_method',
+    'cooking_method', 'cooking_other',
   ]],
   ['Structural & Housing Type', [
-    'year_built', 'housing_type', 'condition', 'ownership',
+    'year_built', 'housing_type', 'housing_type_other', 'condition', 'ownership', 'ownership_other',
   ]],
   ['Residency & Affordability', [
     'years_in_hre', 'anticipated_stay', 'mh_skirting',
     'safety_env', 'safety_social',
-    'afford_urgency', 'afford_strategy',
+    'afford_urgency', 'afford_strategy', 'afford_strategy_other',
   ]],
   ['Relocation Factors', [
     'reloc_factor_emp', 'reloc_factor_aff', 'reloc_factor_qol',
     'reloc_factor_fam', 'reloc_factor_ret', 'reloc_factor_env',
-    'reloc_factor_inh', 'reloc_factor_oth',
+    'reloc_factor_inh', 'reloc_factor_oth', 'reloc_factor_oth_text',
   ]],
   ['Resilience Interventions', [
     'intv_roof_walls', 'intv_windows_doors', 'intv_rain_gardens',
@@ -1618,7 +1618,7 @@ const _IAQ_CATEGORIES = [
     'exp_well_dry', 'exp_pests', 'exp_water_leaks', 'exp_loose_animals',
   ]],
   ['Well-being & Mobility', [
-    'car_access', 'hurricane_transport',
+    'car_access', 'hurricane_transport', 'hurricane_transport_other',
   ]],
   ['Demographics', [
     'education', 'employment',

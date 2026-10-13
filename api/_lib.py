@@ -133,8 +133,12 @@ SURVEY_ANSWER_FIELDS = (
     'leakage_roof', 'leakage_walls', 'leakage_windows', 'leakage_floor',
     'cooling_central_ac', 'cooling_window_unit', 'cooling_fan', 'cooling_none',
     'cooking_method',
-    # Specific QID59 choice — members only.
-    'hospital_visit_detail',
+    # Specific QID59 choice, ticked mold spaces and typed "Other" text —
+    # members only. Free text is also email/phone-redacted at extraction.
+    'hospital_visit_detail', 'mold_locations',
+    'ownership_other', 'reloc_factor_oth_text', 'housing_type_other',
+    'afford_strategy_other', 'cooking_other', 'mold_other',
+    'hurricane_transport_other',
 )
 
 

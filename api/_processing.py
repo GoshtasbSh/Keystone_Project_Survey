@@ -170,6 +170,20 @@ RELOC_FIELDS = (
     'reloc_factor_inh', 'reloc_factor_oth',
 )
 
+# Free-text "Other" boxes that belong to a question the popup already shows.
+# field -> (exact ImportId, verbatim question text from the export's row 1)
+# Read by exact ImportId only — never by the hardcoded column fallback, which
+# could land on a neighbouring answer column.
+OTHER_TEXT_FIELDS = {
+    'ownership_other':           ('QID134_5_TEXT',  'What is your current housing ownership status? (select the most applicable choice) - Other - Text'),
+    'reloc_factor_oth_text':     ('QID181_8_TEXT',  'If you lived in another place before, how important were the following factors in relocating to High Ridge Estates? - Other - Text'),
+    'housing_type_other':        ('QID128_5_TEXT',  'What type of house do you live in? - Other - Text'),
+    'afford_strategy_other':     ('QID19_7_TEXT',   'In your opinion, what is the most effective strategy to improve housing affordability in High Ridge Estates? (Choose up to three options) - Other - Text'),
+    'cooking_other':             ('QID148_4_TEXT',  'What stove type do you have in your home? \r\nPlease select all options that apply. - Other: - Text'),
+    'mold_other':                ('QID149_11_TEXT', 'Is there any evidence of mold in the following spaces?  (Check all that apply) - Other: - Text'),
+    'hurricane_transport_other': ('QID219_4_TEXT',  'During disasters such as hurricanes, have you experienced transportation problems (for example, difficulty evacuating, fuel shortages, lack of access to a vehicle)? - Name the problem - Text'),
+}
+
 # Extra property keys written onto each IAQ feature (not in SURVEY_QUESTIONS)
 # — merged into analysis['survey_questions'] for popup labels.
 IAQ_FEATURE_POPUP_LABELS: dict[str, str] = {
@@ -196,6 +210,8 @@ IAQ_FEATURE_POPUP_LABELS: dict[str, str] = {
     # Same verbatim question text as hospital_visit: this carries the specific
     # answer, the flag above carries the yes/no.
     'hospital_visit_detail': 'Has anyone in your home visited a hospital or any health center for respiratory health issues in the last year?',
+    'mold_locations': 'Is there any evidence of mold in the following spaces?  (Check all that apply) - Selected Choice',
+    **{f: meta[1] for f, meta in OTHER_TEXT_FIELDS.items()},
 }
 
 # ── Qualtrics recode → text-label translation tables ─────────────────────────
@@ -1188,6 +1204,45 @@ def _hospital_flag(cell: str) -> str:
     if not c:
         return ''
     return 'yes' if 'yes' in c else 'no'
+
+
+_EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+(\.[\w-]+)+')
+# Named _FREE_TEXT_PHONE_RE (ruling C8) so it cannot be shadowed by another
+# module-level phone pattern used for address matching.
+_FREE_TEXT_PHONE_RE = re.compile(r'(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}')
+_FREE_TEXT_MAX = 300
+
+
+def _redact_free_text(txt: str) -> str:
+    """Members-only free text still never carries an email or phone number."""
+    t = ' '.join(str(txt or '').split())
+    if not t:
+        return ''
+    t = _EMAIL_RE.sub('[email removed]', t)
+    t = _FREE_TEXT_PHONE_RE.sub('[phone removed]', t)
+    return t[:_FREE_TEXT_MAX]
+
+
+def _extract_other_texts(full_row, qid_to_col_idx: dict | None = None,
+                         df_columns=None) -> dict:
+    """Every OTHER_TEXT_FIELDS answer for one response ('' when blank)."""
+    qmap = qid_to_col_idx or {}
+    cmap = None                      # header scan only if ImportId lacks a QID
+    out: dict = {}
+    for field, (qid, _text) in OTHER_TEXT_FIELDS.items():
+        col = qmap.get(qid)
+        if col is None and df_columns is not None:
+            if cmap is None:
+                cmap = _build_colname_qid_map(df_columns)
+            col = cmap.get(qid)
+        out[field] = _redact_free_text(_val_at_orig_idx(full_row, col)) if col is not None else ''
+    return out
+
+
+def _mold_locations(cell: str) -> str:
+    """The QID149 spaces the respondent ticked, without the bare 'Other:'."""
+    parts = [p.strip() for p in str(cell or '').split(',')]
+    return ', '.join(p for p in parts if p and p.lower().rstrip(':') != 'other')
 
 
 def _compute_struct_score(row) -> int:
@@ -2405,10 +2460,13 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
         # Pass df_full.columns so the extractor can recover from missing
         # ImportId metadata by scanning header text for embedded QIDs —
         # this is the format-parity fix between numeric and text exports.
+        full_row = df_full.iloc[i]      # built once: .iloc row is not free
         survey_extras = _extract_survey_extras(
-            df_full.iloc[i], qid_to_col_idx,
+            full_row, qid_to_col_idx,
             df_columns=df_full.columns, miss_log=qid_miss_log,
         )
+        survey_extras.update(_extract_other_texts(
+            full_row, qid_to_col_idx, df_columns=df_full.columns))
         health = _compute_health_score(row)
         iaq    = _compute_iaq_score(row)
         struct = _compute_struct_score(row)
@@ -2527,6 +2585,7 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
                 # (doctor visit / ER / other) is kept in hospital_visit_detail.
                 'hospital_visit':     _hospital_flag(_cell(_row_nr, 'Hospital Respiratory')),
                 'hospital_visit_detail': _cell(_row_nr, 'Hospital Respiratory'),
+                'mold_locations':     _mold_locations(_cell(_row_nr, 'Mold')),
                 # Raw IAQ sub-items — stored so the popup can display the
                 # full per-respondent IAQ question set without showing "—".
                 'leakage_roof':       _cell(_row_nr, 'Leakage 2_1'),
