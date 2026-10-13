@@ -936,9 +936,18 @@ _COOL_NO_AGE = ("don't know", 'dont know', 'not applicable')
 
 
 def _cool_has_age(row_nr: dict, col: str) -> bool:
-    """True when this cooling row carries a real age band."""
+    """True when this cooling row carries a real age band.
+
+    The matrix is multi-answer, so a cell can hold several scale points
+    ('less than 10 years,Don't know/Not applicable'). It has the system when
+    ANY part is a real age; rejecting the whole cell because one part said
+    "Don't know" gave R_oGMYPwP8cLkeLsx the no-A/C penalty.
+    """
     v = _cell(row_nr, col).lower()
-    return bool(v) and not any(t in v for t in _COOL_NO_AGE)
+    if not v:
+        return False
+    return any(part.strip() and not any(t in part for t in _COOL_NO_AGE)
+               for part in v.split(','))
 
 
 def _compute_iaq_score(row) -> int:
