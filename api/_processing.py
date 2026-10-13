@@ -19,6 +19,7 @@ import urllib.request
 import urllib.parse
 from collections import Counter, defaultdict
 from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 from math import radians, sin, cos, sqrt, atan2, isfinite
 from numbers import Integral, Real
 from pathlib import Path
@@ -861,7 +862,7 @@ def _compute_health_score(row) -> int:
     score = min(raw / 14.4 * 80, 80)
     if 'yes' in str(_nr.get('Hospital Respiratory', '') or '').lower():
         score = min(score + 20, 100)
-    return round(score)
+    return _round_half_up(score)
 
 
 # The mold question (QID149) is "Is there any evidence of mold in the following
@@ -980,7 +981,22 @@ def _compute_iaq_score(row) -> int:
         score += 2
     if _cooks_with_combustion(_nr):
         score += 10
-    return round(min(score, 100))
+    return _round_half_up(min(score, 100))
+
+
+def _round_half_up(x: float, ndigits: int = 0):
+    """Round halves away from zero (18.35 -> 18.4, 22.5 -> 23).
+
+    Python's round() is banker's rounding (22.5 -> 22), which is not how the
+    scores are documented or hand-checked. Rounding to 9 places first removes
+    binary noise (0.35*h gives 22.499999999999996) before the half test.
+    A NaN/inf is returned unchanged (Decimal.quantize would raise on it).
+    """
+    if not isfinite(x):
+        return x
+    q = Decimal(1).scaleb(-ndigits)
+    d = Decimal(repr(round(float(x), 9))).quantize(q, rounding=ROUND_HALF_UP)
+    return int(d) if ndigits == 0 else float(d)
 
 
 def _other_text(row_nr: dict, prefix: str) -> str:
@@ -1788,7 +1804,7 @@ def _compute_iaq_analysis(features: list) -> dict:
     props = [f['properties'] for f in features]
 
     def _mean(lst):
-        return round(sum(lst) / len(lst), 1) if lst else 0
+        return _round_half_up(sum(lst) / len(lst), 1) if lst else 0
 
     def _pct_active(field):
         active = ('weekly', 'month', 'season')
@@ -1983,7 +1999,7 @@ def _compute_iaq_analysis(features: list) -> dict:
                 if isinstance(p.get('years_in_hre_num'), (int, float))]
     yrs_n = len(yrs_vals)
     yrs_sorted = sorted(yrs_vals)
-    yrs_mean = round(sum(yrs_vals) / yrs_n, 1) if yrs_n else 0
+    yrs_mean = _round_half_up(sum(yrs_vals) / yrs_n, 1) if yrs_n else 0
     yrs_median = (yrs_sorted[yrs_n // 2] if yrs_n % 2
                   else (yrs_sorted[yrs_n // 2 - 1] + yrs_sorted[yrs_n // 2]) / 2) if yrs_n else 0
     yrs_bins = defaultdict(int)
@@ -2028,7 +2044,7 @@ def _compute_iaq_analysis(features: list) -> dict:
             'years_in_hre': {
                 'n_valid':     yrs_n,
                 'mean':        yrs_mean,
-                'median':      round(float(yrs_median), 1),
+                'median':      _round_half_up(float(yrs_median), 1),
                 'distribution': dict(yrs_bins),
             },
             # QID47 is multi-answer: '1-5 years,6-10 years' counts once in
@@ -2093,7 +2109,7 @@ def _compute_street_stats(features: list) -> dict:
 
         def _m(field):
             vals = [p[field] for p in props if isinstance(p.get(field), (int, float))]
-            return round(sum(vals) / len(vals), 1) if vals else 0
+            return _round_half_up(sum(vals) / len(vals), 1) if vals else 0
 
         def _pct_active(field):
             active = ('weekly', 'month', 'season')
@@ -2396,7 +2412,8 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
         health = _compute_health_score(row)
         iaq    = _compute_iaq_score(row)
         struct = _compute_struct_score(row)
-        risk   = round(0.35 * health + 0.35 * iaq + 0.30 * struct)
+        # Integer arithmetic: exact half-up, no float noise.
+        risk   = (35 * health + 35 * iaq + 30 * struct + 50) // 100
         tier   = 'Low' if risk < 34 else ('Medium' if risk < 67 else 'High')
         tier_color = '#10b981' if tier == 'Low' else ('#f97316' if tier == 'Medium' else '#ef4444')
 

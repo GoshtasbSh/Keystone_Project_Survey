@@ -81,7 +81,7 @@ def test_none_is_not_a_water_problem():
 def test_each_real_water_problem_scores_seven_and_a_half():
     assert _compute_iaq_score(row(**{
         'Leakage 2_1': 'less than one week', 'Leakage 2_2': 'none',
-        'Leakage 2_3': 'more than one week', 'Leakage 2_4': 'not fixed'})) == 22
+        'Leakage 2_3': 'more than one week', 'Leakage 2_4': 'not fixed'})) == 23  # 22.5 rounds half-up
 
 
 # ── cooling (QID205) ──────────────────────────────────────────────────────────
