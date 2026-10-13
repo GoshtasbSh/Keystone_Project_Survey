@@ -377,6 +377,11 @@ async function refreshAllData() {
 
     // Restore viewport without animation so it feels like an in-place refresh.
     map.jumpTo({ center, zoom });
+
+    // An upload writes a new analysis version; without this the header
+    // badge kept the date the page was opened with (stuck on Jul 20 after
+    // the Oct 13 upload).
+    await loadAnalysisMeta();
   } catch (e) {
     console.warn('refreshAllData failed:', e);
   }
@@ -2355,8 +2360,231 @@ function updateStatusRowHighlights() {
   });
 }
 
+// ── Address search ──────────────────────────────────────────────────────────
+// The text filter below only ever reached canvass contacts, so a survey-only
+// (purple) point or a field pin — neither carries an address — could not be
+// found by typing an address. The search now also looks the address up in
+// every parcel and flies the map to the house, where whatever sits on it
+// (contact, survey-only point, field pin) is visible and ringed.
+const _ADDR_SUFFIX = {
+  avenue: 'ave', av: 'ave', ave: 'ave', street: 'st', str: 'st', st: 'st',
+  road: 'rd', rd: 'rd', drive: 'dr', dr: 'dr', circle: 'cir', cir: 'cir',
+  lane: 'ln', ln: 'ln', court: 'ct', ct: 'ct', place: 'pl', pl: 'pl',
+  boulevard: 'blvd', blvd: 'blvd', terrace: 'ter', ter: 'ter',
+  highway: 'hwy', hwy: 'hwy', parkway: 'pkwy', pkwy: 'pkwy', trail: 'trl', trl: 'trl',
+};
+const _ADDR_SUFFIXES = new Set(Object.values(_ADDR_SUFFIX));
+const _ADDR_DROP = new Set(['keystone', 'heights', 'kh', 'fl', 'fla', 'florida', 'usa']);
+
+function _normAddr(s) {
+  return String(s || '').toLowerCase()
+    .replace(/centre/g, 'center')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .split(/\s+/)
+    .filter(t => t && !_ADDR_DROP.has(t) && !/^\d{5}$/.test(t))
+    .map(t => _ADDR_SUFFIX[t] || t)
+    .join(' ');
+}
+
+// Rank of `entryKey` for query tokens, or 0 for no match. A leading house
+// number must match exactly; street words match by prefix; a street-type
+// word (st/ave/dr…) that disagrees is ignored rather than fatal, because
+// typed addresses routinely say "Street" for an "Avenue".
+function _addrMatchScore(qTokens, entryKey) {
+  const eTokens = entryKey.split(' ');
+  let score = 1;
+  let i = 0;
+  if (/^\d+$/.test(qTokens[0] || '')) {
+    if (eTokens[0] !== qTokens[0]) return 0;
+    score += 4; i = 1;
+  }
+  for (; i < qTokens.length; i++) {
+    const q = qTokens[i];
+    if (eTokens.some(t => t === q)) { score += 2; continue; }
+    if (eTokens.some(t => t.startsWith(q))) { score += 1; continue; }
+    if (_ADDR_SUFFIXES.has(q)) continue;
+    return 0;
+  }
+  return score;
+}
+
+function _geomCenter(g) {
+  if (!g) return null;
+  if (g.type === 'Point') return g.coordinates;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const walk = (c) => {
+    if (typeof c[0] === 'number') {
+      if (c[0] < minX) minX = c[0]; if (c[0] > maxX) maxX = c[0];
+      if (c[1] < minY) minY = c[1]; if (c[1] > maxY) maxY = c[1];
+    } else c.forEach(walk);
+  };
+  walk(g.coordinates);
+  return isFinite(minX) ? [(minX + maxX) / 2, (minY + maxY) / 2] : null;
+}
+
+let _searchIndex = null, _searchIndexSrc = null;
+function _getSearchIndex() {
+  const src = [surveyData, parcelsData, iaqData];
+  if (_searchIndex && _searchIndexSrc && src.every((d, i) => d === _searchIndexSrc[i])) return _searchIndex;
+  const byKey = new Map();
+  const add = (addr, coords, kind, extra = {}) => {
+    const key = _normAddr(addr);
+    if (!key || !/^\d/.test(key) || !coords) return;
+    let e = byKey.get(key);
+    if (!e) { e = { key, label: String(addr).replace(/\s+/g, ' ').trim(), coords, kinds: new Set(), parcel: null }; byKey.set(key, e); }
+    e.kinds.add(kind);
+    // A map point beats a parcel centre as the place to fly to.
+    if (kind !== 'Parcel' && e.coordsFrom !== 'point') { e.coords = coords; e.coordsFrom = 'point'; e.label = String(addr).replace(/\s+/g, ' ').trim(); }
+    if (extra.parcel) e.parcel = extra.parcel;
+  };
+  for (const f of (surveyData?.features || [])) {
+    const p = f.properties || {};
+    if (p.address) add(p.address, f.geometry?.coordinates, p.status ? `Contact · ${p.status}` : 'Contact');
+  }
+  for (const f of (iaqData?.features || [])) {
+    const p = f.properties || {};
+    if (p.parcel_address && p.parcel_address !== ORPHAN_FALLBACK_ADDR) add(p.parcel_address, f.geometry?.coordinates, 'Survey only');
+  }
+  for (const f of (parcelsData?.features || [])) {
+    const a = f.properties?.address;
+    if (a) add(a, _geomCenter(f.geometry), 'Parcel', { parcel: f });
+  }
+  _searchIndex = [...byKey.values()];
+  _searchIndexSrc = src;
+  return _searchIndex;
+}
+
+function searchAddresses(query, limit = 8) {
+  const q = _normAddr(query);
+  if (!q) return [];
+  const qTokens = q.split(' ');
+  const out = [];
+  for (const e of _getSearchIndex()) {
+    const s = _addrMatchScore(qTokens, e.key);
+    if (s) out.push({ e, s: s + (e.key === q ? 10 : 0) + (e.coordsFrom === 'point' ? 1 : 0) });
+  }
+  out.sort((a, b) => b.s - a.s || (parseInt(a.e.key, 10) - parseInt(b.e.key, 10)) || a.e.key.localeCompare(b.e.key));
+  return out.slice(0, limit).map(x => x.e);
+}
+
+// Contacts carry a normalised key so the live text filter tolerates
+// "Street"/"St", "Avenue"/"Ave", case and punctuation the same way the
+// result list does. Stamped lazily; pushes fresh data to the sources once.
+function _stampContactSearchKeys() {
+  const feats = surveyData?.features || [];
+  let changed = false;
+  for (const f of feats) {
+    const p = f.properties || (f.properties = {});
+    if (p._skey === undefined) { p._skey = _normAddr(p.address); changed = true; }
+  }
+  if (changed && typeof map !== 'undefined') {
+    map.getSource('survey')?.setData(surveyData);
+    map.getSource('survey-clustered')?.setData(surveyData);
+  }
+}
+
+let _searchSelection = null;   // entry picked from the result list
+
+function _showSearchHit(entry) {
+  const pt = { type: 'FeatureCollection', features: entry ? [{ type: 'Feature', geometry: { type: 'Point', coordinates: entry.coords }, properties: {} }] : [] };
+  const parcelSrc = entry?.parcel || (entry && (parcelsData?.features || []).find(f => _normAddr(f.properties?.address) === entry.key));
+  const pg = { type: 'FeatureCollection', features: parcelSrc ? [{ type: 'Feature', geometry: parcelSrc.geometry, properties: {} }] : [] };
+  if (!map.getSource('search-hit')) {
+    map.addSource('search-hit', { type: 'geojson', data: pt });
+    map.addSource('search-hit-parcel', { type: 'geojson', data: pg });
+    map.addLayer({ id: 'search-hit-parcel-line', type: 'line', source: 'search-hit-parcel',
+      paint: { 'line-color': '#facc15', 'line-width': 3 } });
+    map.addLayer({ id: 'search-hit-ring', type: 'circle', source: 'search-hit',
+      paint: { 'circle-radius': 22, 'circle-color': 'rgba(250,204,21,0.08)',
+               'circle-stroke-color': '#facc15', 'circle-stroke-width': 3 } });
+  } else {
+    map.getSource('search-hit').setData(pt);
+    map.getSource('search-hit-parcel').setData(pg);
+  }
+  // Keep the ring above layers that were added after it.
+  ['search-hit-parcel-line', 'search-hit-ring'].forEach(id => { if (map.getLayer(id)) map.moveLayer(id); });
+}
+
+function _renderSearchResults(results) {
+  const box = document.getElementById('search-results');
+  if (!box) return;
+  const input = document.getElementById('search-input');
+  if (!results.length) {
+    box.innerHTML = input.value.trim()
+      ? '<div class="search-empty">No matching address. Try the house number and street name only.</div>'
+      : '';
+    box.classList.toggle('show', !!input.value.trim());
+    return;
+  }
+  box.innerHTML = results.map((e, i) => {
+    const kinds = [...e.kinds].filter(k => k !== 'Parcel');
+    const tag = kinds.length ? kinds.join(' · ') : 'Parcel';
+    return `<div class="search-result${i === 0 ? ' active' : ''}" data-i="${i}">
+      <div class="search-result-addr">${escapeHtml(e.label)}</div>
+      <div class="search-result-tag">${escapeHtml(tag)}</div></div>`;
+  }).join('');
+  box.classList.add('show');
+}
+
+function selectSearchResult(entry) {
+  if (!entry) return;
+  _searchSelection = entry;
+  const input = document.getElementById('search-input');
+  input.value = entry.label;
+  document.getElementById('search-results')?.classList.remove('show');
+  applyFilters();
+  _showSearchHit(entry);
+  map.flyTo({ center: entry.coords, zoom: Math.max(map.getZoom(), 18.5), duration: 900 });
+}
+
+function clearSearch() {
+  _searchSelection = null;
+  const input = document.getElementById('search-input');
+  if (input) input.value = '';
+  document.getElementById('search-results')?.classList.remove('show');
+  if (map.getSource('search-hit')) _showSearchHit(null);
+  applyFilters();
+}
+
+function initAddressSearch() {
+  const input = document.getElementById('search-input');
+  const box = document.getElementById('search-results');
+  if (!input || !box) return;
+  let results = [], active = 0;
+  const setActive = (i) => {
+    active = Math.max(0, Math.min(results.length - 1, i));
+    box.querySelectorAll('.search-result').forEach((el, j) => el.classList.toggle('active', j === active));
+  };
+  input.addEventListener('input', () => {
+    _searchSelection = null;
+    if (map.getSource('search-hit')) _showSearchHit(null);
+    results = searchAddresses(input.value);
+    active = 0;
+    _renderSearchResults(results);
+    applyFilters();
+  });
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); setActive(active + 1); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); setActive(active - 1); }
+    else if (ev.key === 'Enter') { ev.preventDefault(); if (results[active]) selectSearchResult(results[active]); }
+    else if (ev.key === 'Escape') { clearSearch(); input.blur(); }
+  });
+  input.addEventListener('focus', () => { if (results.length && !_searchSelection) box.classList.add('show'); });
+  // mousedown (not click) so the choice lands before the input's blur hides the list.
+  box.addEventListener('mousedown', (ev) => {
+    const el = ev.target.closest('.search-result');
+    if (!el) return;
+    ev.preventDefault();
+    selectSearchResult(results[+el.dataset.i]);
+  });
+  input.addEventListener('blur', () => setTimeout(() => box.classList.remove('show'), 150));
+  document.getElementById('search-clear')?.addEventListener('click', clearSearch);
+}
+
 function applyFilters() {
-  const search = (document.getElementById('search-input')?.value || '').toLowerCase();
+  // Once an address is picked from the list the map flies there and rings
+  // it; all points stay visible so the neighbours give context.
+  const search = _searchSelection ? '' : _normAddr(document.getElementById('search-input')?.value || '');
   let filter = ['all'];
 
   // Status filter: show only selected; if nothing selected, no status filter
@@ -2366,9 +2594,10 @@ function applyFilters() {
 
   // Search filter
   if (search) {
+    _stampContactSearchKeys();
     filter.push(['any',
-      ['in', search, ['downcase', ['get', 'address']]],
-      ['in', search, ['downcase', ['get', 'street_name']]],
+      ['in', search, ['coalesce', ['get', '_skey'], '']],
+      ['in', search, ['downcase', ['coalesce', ['get', 'street_name'], '']]],
     ]);
   }
 
@@ -2772,7 +3001,7 @@ function setupUI() {
   });
 
   // Search
-  document.getElementById('search-input').addEventListener('input', () => applyFilters());
+  initAddressSearch();
 
   // Legend reset
   document.getElementById('legend-reset').addEventListener('click', () => {
