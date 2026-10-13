@@ -804,6 +804,27 @@ def _isna(val) -> bool:
         return False
 
 
+def _is_blank_answer(val) -> bool:
+    """True only for a cell the respondent left empty (None / NaN / '').
+
+    Unlike _isna, the literal word 'none' is NOT missing here: QID42's fourth
+    scale point is labelled 'none' ("the problem never happened"), so treating
+    it as blank erased 323 real answers from the popup. _isna keeps its old
+    meaning for addresses and contact notes, where 'none' is a placeholder.
+    """
+    if val is None:
+        return True
+    try:
+        if val != val:          # NaN
+            return True
+    except Exception:
+        pass
+    try:
+        return str(val).strip().lower() in ('', 'nan', 'nat')
+    except Exception:
+        return False
+
+
 def _freq_score(val) -> int:
     if _isna(val):
         return 0
@@ -951,14 +972,13 @@ def _cell(row_map: dict, key: str) -> str:
     Integral floats also render as '6.0'; a recode code must read '6'.
     """
     v = row_map.get(key, '')
-    if v is None or _isna(v):
+    if _is_blank_answer(v):
         return ''
     if isinstance(v, Real) and not isinstance(v, bool):
         x = float(v)
         if isfinite(x) and abs(x - round(x)) < 1e-9:
             return str(int(round(x)))
-    s = str(v).strip()
-    return '' if s.lower() in ('nan', 'none') else s
+    return str(v).strip()
 
 
 def _val_at_orig_idx(full_row, orig_idx):
@@ -970,7 +990,7 @@ def _val_at_orig_idx(full_row, orig_idx):
         v = full_row.iloc[orig_idx]
     except (IndexError, KeyError, AttributeError):
         return ''
-    if v is None or _isna(v):
+    if _is_blank_answer(v):
         return ''
     # pandas types a numeric-recode column as float64, so str(6) is '6.0'.
     # Recode lookup tolerates that, but a question with no label table would
@@ -979,8 +999,7 @@ def _val_at_orig_idx(full_row, orig_idx):
         x = float(v)
         if isfinite(x) and abs(x - round(x)) < 1e-9:
             return str(int(round(x)))
-    s = str(v).strip()
-    return '' if s.lower() in ('nan', 'none') else s
+    return str(v).strip()
 
 
 def _parse_years_numeric(v):
