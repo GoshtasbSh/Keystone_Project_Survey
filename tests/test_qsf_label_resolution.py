@@ -72,9 +72,10 @@ def test_qsf_label_map_is_present_and_loaded():
     # The safety scale exports as durations belonging to another question.
     ('QID21', 'Less than 6 months', 'Always feel safe'),
     ('QID194', 'Less than 6 months', 'Always feel safe'),
-    # Placeholders resolve to the real choice.
-    ('QID141', 'Click to write Choice 5',
-     'Critical- Uninhabitable without repairs.'),
+    # Placeholders resolve to the real choice. QID141's choice 5 is the
+    # recoded choice of shared code 1, so it reads as the shared-code switch
+    # decides (Excellent, PI decision 2026-10-13) — the same as code 1.
+    ('QID141', 'Click to write Choice 5', 'Excellent- No repairs needed.'),
     ('QID181', 'Click to write Scale Point 3', 'Important'),
     # Numeric codes resolve too.
     ('QID192', '5', "I don't know"),
@@ -86,27 +87,29 @@ def test_known_corruptions_resolve_to_the_real_answer(qid, exported, expected):
 
 @pytest.mark.parametrize('qid,code,expected', [
     # QID141's RecodeValues send choice 5 to code 1, which choice 1 also uses.
-    ('QID141', '1', 'Critical- Uninhabitable without repairs.'),
+    # PI decision 2026-10-13: the code-1 homes answered "Excellent".
+    ('QID141', '1', 'Excellent- No repairs needed.'),
     # QID17 sends choices 3,4,5 to codes 1,2,3; choices 1,2 keep 1,2.
+    # Kept on the explicitly recoded choice.
     ('QID17', '1', 'Moderately Urgent'),
     ('QID17', '2', 'Slightly Urgent'),
     ('QID17', '3', 'Not Urgent'),
-    # QID100 sends choices 3,4 to codes 1,2.
-    ('QID100', '1', 'Somewhat'),
-    ('QID100', '2', 'Not Applicable'),
+    # QID100 sends choices 3,4 to codes 1,2. PI decision 2026-10-13: code 1
+    # is "Yes"; code 2 holds "No" and every site-built house.
+    ('QID100', '1', 'Yes'),
+    ('QID100', '2', 'No / Not applicable'),
 ])
-def test_colliding_codes_resolve_to_the_explicitly_recoded_choice(qid, code, expected):
-    """A code claimed by two choices belongs to the one RecodeValues names.
+def test_colliding_codes_resolve_as_the_shared_code_switch_decides(qid, code, expected):
+    """A code claimed by two choices is read per survey_logic.SHARED_CODE_RESOLUTION.
 
-    An explicit RecodeValues entry is a deliberate act by the survey author; a
-    choice landing on a code only because unlisted choices recode to their own
-    key is just Qualtrics' default. So the explicit claim wins.
-
-    This is not a guess: for the 75 respondents in both the April (text) and May
-    (numeric) exports the pairing is 1:1 with no counterexample — code 1 on
-    QID141 is always "Click to write Choice 5" in the text export (11 rows),
-    QID17 code 1 is always choice 3 (36 rows) and code 2 always choice 4 (25),
-    QID100 code 1 always choice 3 (47) and code 2 always choice 4 (24).
+    For the 75 respondents in both the April (text) and May (numeric) exports
+    the pairing is 1:1 with no counterexample — code 1 on QID141 is always
+    "Click to write Choice 5" in the text export (11 rows), QID17 code 1 is
+    always choice 3 (36 rows) and code 2 always choice 4 (25), QID100 code 1
+    always choice 3 (47) and code 2 always choice 4 (24). Which WORDING those
+    picks carry was decided by the PI on 2026-10-13 from the answers' content
+    (code-1 homes report the fewest problems; code 2 holds every site-built
+    house). See tests/test_proc_shared_code_switch.py.
     """
     assert resolve_answer_label(qid, code) == expected
 
@@ -140,16 +143,17 @@ def test_no_placeholder_text_survives_in_either_export(april, may):
     assert not leaks, f'Qualtrics placeholder text still reaching users: {leaks}'
 
 
-def test_condition_scale_is_not_inverted(april, may):
-    """The worst answer must not be reported as the best one."""
+def test_condition_code_1_reads_as_decided_in_both_formats(april, may):
+    """Code 1 / choice 5 is "Excellent" (PI decision 2026-10-13), in both the
+    text and the numeric export, and nothing is labelled "Critical"."""
     for label, df in (('april', april), ('may', may)):
         counts = Counter(df['QID141'].astype(str))
         critical = counts.get('Critical- Uninhabitable without repairs.', 0)
         excellent = counts.get('Excellent- No repairs needed.', 0)
-        assert critical > 0, f'[{label}] no Critical responses — scale likely inverted'
-        assert excellent == 0, (
-            f'[{label}] {excellent} responses labelled Excellent; this survey has '
-            f'none, and code 1 is Critical (see QID141_RECODE_LABELS)')
+        assert excellent > 0, f'[{label}] no Excellent responses — switch not applied'
+        assert critical == 0, (
+            f'[{label}] {critical} responses labelled Critical; under the '
+            f'decided reading this data has none (see SHARED_CODE_RESOLUTION)')
 
 
 def test_shared_responses_agree_across_both_export_formats(april, may):

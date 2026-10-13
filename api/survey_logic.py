@@ -23,8 +23,137 @@ from math import radians, sin, cos, sqrt, atan2
 # This stays a survey-definition defect: if a respondent ever does choose
 # Excellent it will also export as code 1 and be mislabelled Critical. The
 # durable fix is to correct RecodeValues in Qualtrics so choice 5 recodes to 5.
+#
+# SUPERSEDED 2026-10-13 by the PI's decision (see the switch below): the
+# respondents did pick choice 5, but the code-1 homes report the FEWEST
+# problems (0/20 water leaks, 1/20 pests, against 15/22 and 16/22 for Poor),
+# so the wording they answered was "Excellent". Code 1 is now read as
+# Excellent, and "Critical" does not occur in this data.
+
+# ── Shared-code switch (ONE place, one setting per question) ───────────────
+# Four questions have RecodeValues that send a choice onto a code another,
+# un-recoded choice already exports as. A numeric export cannot tell the two
+# apart from the code alone:
+#
+#   QID141 code 1 -> choice 5 "Critical- Uninhabitable" (recoded)  or choice 1 "Excellent"
+#   QID17  code 1 -> choice 3 "Moderately Urgent"       (recoded)  or choice 1 "Very Urgent"
+#          code 2 -> choice 4 "Slightly Urgent"         (recoded)  or choice 2 "Urgent"
+#   QID100 code 1 -> choice 3 "Somewhat"                (recoded)  or choice 1 "Yes"
+#          code 2 -> choice 4 "Not Applicable"          (recoded)  or choice 2 "No"
+#   QID221 (same scale as QID100)
+#
+# (QID17 code 3 is NOT shared: choice 3 recodes to 1, so a 3 can only be
+# choice 5 "Not Urgent".)
+#
+# 'recoded_choice'  — the code means the choice RecodeValues explicitly sends
+#                     there, shown with that choice's Display text.
+# 'original_choice' — the code means the choice whose own ID it is. The text
+#                     export's answer for the recoded choice ('Click to write
+#                     Choice 5') reads the same, because it is the same pick:
+#                     the April text export shows every code-1 respondent on
+#                     the recoded choice, so the two formats must agree.
+#
+# Decided by the PI on 2026-10-13 from the April/October evidence (ledger
+# "USER DECISION 2026-10-13"):
+#   QID141 -> original_choice  code 1 = "Excellent- No repairs needed."
+#   QID17  -> recoded_choice   1 Moderately / 2 Slightly / 3 Not Urgent (unchanged)
+#   QID100 -> original_choice  1 = "Yes", 2 = "No / Not applicable"
+#   QID221 -> original_choice  (same as QID100)
+# To change a reading, edit this dict and re-process the CSV. Nothing else.
+SHARED_CODE_RESOLUTION = {
+    "QID141": "original_choice",
+    "QID17":  "recoded_choice",
+    "QID100": "original_choice",
+    "QID221": "original_choice",
+}
+_SHARED_CODE_MODES = ("recoded_choice", "original_choice")
+
+# qid -> {exported code: (recoded choice key, original choice key)}
+SHARED_CODES = {
+    "QID141": {"1": ("5", "1")},
+    "QID17":  {"1": ("3", "1"), "2": ("4", "2")},
+    "QID100": {"1": ("3", "1"), "2": ("4", "2")},
+    "QID221": {"1": ("3", "1"), "2": ("4", "2")},
+}
+
+# Wording used under 'original_choice' where the code carries two answers the
+# evidence cannot separate: code 2 on skirting/anchoring holds every site-built
+# house (for whom "Not Applicable" fits) as well as the mobile homes saying No.
+SHARED_CODE_ORIGINAL_LABELS = {
+    ("QID100", "2"): "No / Not applicable",
+    ("QID221", "2"): "No / Not applicable",
+}
+
+# All four readings above were confirmed by the PI on 2026-10-13, so the UI
+# shows no "label unverified" note. Set False if a reading is ever reopened.
+SHARED_CODE_VERIFIED = True
+
+# The feature properties that carry a shared-code answer (QID221 has none).
+SHARED_CODE_FIELDS = ["condition", "afford_urgency", "mh_skirting"]
+
+# (qid, recoded choice key) -> the shared code that choice exports as
+_RECODED_CHOICE_CODE = {
+    (qid, pair[0]): code
+    for qid, codes in SHARED_CODES.items() for code, pair in codes.items()
+}
+
+
+def _shared_code_mode(qid: str) -> str:
+    """The current reading for one question. Read from the module global at
+    call time so editing the switch (or a test's monkeypatch) takes effect."""
+    mode = SHARED_CODE_RESOLUTION.get(qid, "recoded_choice")
+    if mode not in _SHARED_CODE_MODES:
+        raise ValueError(f"SHARED_CODE_RESOLUTION[{qid!r}] must be one of "
+                         f"{_SHARED_CODE_MODES}, not {mode!r}")
+    return mode
+
+
+def shared_code_choice_key(qid, code) -> str | None:
+    """Choice key a shared numeric code resolves to under the current switch,
+    or None when (qid, code) is not a shared code."""
+    qid = str(qid or "")
+    pair = SHARED_CODES.get(qid, {}).get(str(code))
+    if pair is None:
+        return None
+    return pair[0] if _shared_code_mode(qid) == "recoded_choice" else pair[1]
+
+
+def _shared_code_label(qid: str, code: str, display: dict) -> str | None:
+    """Text shown for a shared code under the current switch (None if the
+    code is not shared). `display` is the question's choice-key -> Display."""
+    key = shared_code_choice_key(qid, code)
+    if key is None:
+        return None
+    if _shared_code_mode(qid) == "original_choice":
+        override = SHARED_CODE_ORIGINAL_LABELS.get((qid, str(code)))
+        if override:
+            return override
+    return display.get(key)
+
+
+def shared_code_status() -> dict:
+    """What the analysis reports about the shared-code questions."""
+    for q in SHARED_CODES:
+        _shared_code_mode(q)                      # refuse an unknown mode
+    return {"resolution": {q: SHARED_CODE_RESOLUTION.get(q, "recoded_choice")
+                           for q in sorted(SHARED_CODES)},
+            "questions": sorted(SHARED_CODES),
+            "fields": list(SHARED_CODE_FIELDS),
+            "verified": bool(SHARED_CODE_VERIFIED)}
+
+
+_QID141_DISPLAY = {
+    "1": "Excellent- No repairs needed.",
+    "2": "Good- Minor repairs needed.",
+    "3": "Fair- Some repairs needed.",
+    "4": "Poor- Major repairs needed.",
+    "5": "Critical- Uninhabitable without repairs.",
+}
+
+# Hand-written fallback, used only if the generated QSF label map is missing.
+# Code 1 follows the switch (evaluated once, at import).
 QID141_RECODE_LABELS = {
-    "1": "Critical- Uninhabitable without repairs.",
+    "1": _shared_code_label("QID141", "1", _QID141_DISPLAY),
     "2": "Good- Minor repairs needed.",
     "3": "Fair- Some repairs needed.",
     "4": "Poor- Major repairs needed.",
@@ -356,7 +485,7 @@ def _norm_label(s) -> str:
     return ' '.join(str(s or '').replace('\xa0', ' ').split()).strip()
 
 
-def _resolve_one(entry: dict, token: str) -> str | None:
+def _resolve_one(entry: dict, token: str, qid: str | None = None) -> str | None:
     """Resolve a single answer token to its on-screen Display text."""
     t = _norm_label(token)
     if not t:
@@ -370,7 +499,16 @@ def _resolve_one(entry: dict, token: str) -> str | None:
         code = t
         if code.endswith('.0') and code[:-2].isdigit():
             code = code[:-2]
+        # A code two choices share: SHARED_CODE_RESOLUTION decides.
+        forced = _shared_code_label(qid, code, entry['display']) if qid else None
+        if forced is not None:
+            return forced
         keys = entry['code_to_key'].get(code)
+    elif qid and len(keys) == 1 and (qid, keys[0]) in _RECODED_CHOICE_CODE:
+        # Text export naming the recoded choice of a shared code: it is the
+        # same pick as that code, so it reads the same under the switch.
+        return _shared_code_label(qid, _RECODED_CHOICE_CODE[(qid, keys[0])],
+                                  entry['display'])
 
     if not keys or len(keys) > 1:
         return None  # unknown, or ambiguous — never guess
@@ -391,7 +529,8 @@ def resolve_answer_label(qid: str, value) -> str | None:
     if not entry:
         return None
 
-    whole = _resolve_one(entry, value)
+    qid = str(qid or '')
+    whole = _resolve_one(entry, value, qid)
     if whole is not None:
         return whole
 
@@ -399,7 +538,7 @@ def resolve_answer_label(qid: str, value) -> str | None:
     if ',' not in raw:
         return None
     parts = [p for p in (s.strip() for s in raw.split(',')) if p]
-    resolved = [_resolve_one(entry, p) for p in parts]
+    resolved = [_resolve_one(entry, p, qid) for p in parts]
     if not resolved or any(r is None for r in resolved):
         return None
     return ','.join(resolved)

@@ -30,6 +30,7 @@ from shapely.strtree import STRtree as _STRtree
 try:
     from survey_logic import (
         QID141_RECODE_LABELS,
+        shared_code_status,
         compute_struct_score as _compute_struct_score_light,
         build_validation_summary as _build_validation_summary_light,
         symptom_frequency_score,
@@ -39,6 +40,7 @@ try:
 except ImportError:
     from .survey_logic import (
         QID141_RECODE_LABELS,
+        shared_code_status,
         compute_struct_score as _compute_struct_score_light,
         build_validation_summary as _build_validation_summary_light,
         symptom_frequency_score,
@@ -1878,7 +1880,11 @@ def _compute_iaq_analysis(features: list) -> dict:
     conds: dict = defaultdict(int)
     for p in props:
         c = str(p.get('condition', '') or '').lower()
-        if 'good' in c:   conds['Good'] += 1
+        # 'Excellent' is what QID141 code 1 reads as under the shared-code
+        # switch (survey_logic.SHARED_CODE_RESOLUTION); without this bucket
+        # it fell to Unknown.
+        if 'excellent' in c: conds['Excellent'] += 1
+        elif 'good' in c: conds['Good'] += 1
         elif 'fair' in c: conds['Fair'] += 1
         elif 'poor' in c: conds['Poor'] += 1
         elif 'critical' in c or 'uninhabitable' in c:
@@ -2644,6 +2650,10 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
     analysis = _compute_iaq_analysis(features)
     analysis['input_format'] = 'numeric_recode' if numeric_recode_mode else 'text_labels'
     analysis['recode_translation_applied'] = True
+    # How the condition / urgency / skirting / anchoring codes that two
+    # Qualtrics choices share were read (survey_logic.SHARED_CODE_RESOLUTION),
+    # and whether that reading is confirmed. Reported so the UI can say so.
+    analysis['shared_code_labels'] = shared_code_status()
     analysis['validation'] = _build_validation_summary(features, contact_features)
     # Every chart is computed over the responses we could place on the map, so
     # a response whose address will not geocode is excluded from all of them.
