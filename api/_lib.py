@@ -133,6 +133,8 @@ SURVEY_ANSWER_FIELDS = (
     'leakage_roof', 'leakage_walls', 'leakage_windows', 'leakage_floor',
     'cooling_central_ac', 'cooling_window_unit', 'cooling_fan', 'cooling_none',
     'cooking_method',
+    # Specific QID59 choice — members only.
+    'hospital_visit_detail',
 )
 
 

@@ -192,6 +192,9 @@ IAQ_FEATURE_POPUP_LABELS: dict[str, str] = {
     'cooling_fan': 'What type of cooling system do you use and how old is it? (check all that apply) - Ceiling Fans',
     'cooling_none': 'What type of cooling system do you use and how old is it? (check all that apply) - No Air-conditioning',
     'cooking_method': 'What stove type do you have in your home? \r\nPlease select all options that apply. - Selected Choice',
+    # Same verbatim question text as hospital_visit: this carries the specific
+    # answer, the flag above carries the yes/no.
+    'hospital_visit_detail': 'Has anyone in your home visited a hospital or any health center for respiratory health issues in the last year?',
 }
 
 # ── Qualtrics recode → text-label translation tables ─────────────────────────
@@ -879,7 +882,11 @@ _MOLD_NO_EVIDENCE = re.compile(
     # a typo ('N0o'), a phrasing ('No where visable'), and a bare "Don't
     # know" with no leading "I".
     r"no\s*where\s+vis[ai]ble|nowhere\s+vis[ai]ble|"
-    r"(none|not)\s+vis[ai]ble)\.?$", re.I)
+    r"(none|not)\s+vis[ai]ble|"
+    # 'no evidence to my knowledge' (R_36hwtQ5ZQOhBucE) was scored as mold.
+    r"no\s+(visible\s+)?evidence(\s+(of\s+(any\s+)?mold|to\s+my\s+knowledge|"
+    r"that\s+i\s+(know|can\s+see)(\s+of)?|found|seen))*|"
+    r"not\s+to\s+my\s+knowledge)\.?$", re.I)
 
 
 def _mold_text_denies(txt: str) -> bool:
@@ -1117,6 +1124,14 @@ def _extract_survey_extras(full_row, qid_to_col_idx: dict | None = None,
         out[field] = _val_at_orig_idx(full_row, col)
     out['years_in_hre_num'] = _parse_years_numeric(out.get('years_in_hre'))
     return out
+
+
+def _hospital_flag(cell: str) -> str:
+    """'yes' / 'no' for QID59, '' when the respondent left it blank."""
+    c = str(cell or '').strip().lower()
+    if not c:
+        return ''
+    return 'yes' if 'yes' in c else 'no'
 
 
 def _compute_struct_score(row) -> int:
@@ -2448,9 +2463,11 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
                 'wheeze_freq':        _cell(_row_nr, 'wheeze'),
                 'headache_freq':      _cell(_row_nr, 'Headache'),
                 'tired_freq':         _cell(_row_nr, 'Tired'),
-                'hospital_visit':     ('yes' if 'yes' in
-                                       _cell(_row_nr, 'Hospital Respiratory').lower()
-                                       else 'no'),
+                # 'yes' / 'no' as before, but '' when the question was left
+                # blank (2 respondents were shown "No"). The specific choice
+                # (doctor visit / ER / other) is kept in hospital_visit_detail.
+                'hospital_visit':     _hospital_flag(_cell(_row_nr, 'Hospital Respiratory')),
+                'hospital_visit_detail': _cell(_row_nr, 'Hospital Respiratory'),
                 # Raw IAQ sub-items — stored so the popup can display the
                 # full per-respondent IAQ question set without showing "—".
                 'leakage_roof':       _cell(_row_nr, 'Leakage 2_1'),

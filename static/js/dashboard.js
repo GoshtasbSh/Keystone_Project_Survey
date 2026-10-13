@@ -1585,7 +1585,7 @@ const _IAQ_CATEGORIES = [
   ['Health & Symptoms', [
     'respiratory_ill', 'asthma_freq', 'wheeze_freq',
     'headache_freq', 'tired_freq',
-    'hospital_visit',
+    'hospital_visit', 'hospital_visit_detail',
   ]],
   ['Indoor Air Quality', [
     'has_mold',
