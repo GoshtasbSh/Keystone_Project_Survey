@@ -978,9 +978,40 @@ def _compute_iaq_score(row) -> int:
         score += 4
     elif (has_window or has_fan) and not has_central:
         score += 2
-    if any(kw in str(_nr.get('Cooking', '') or '').lower() for kw in ('gas', 'propane')):
+    if _cooks_with_combustion(_nr):
         score += 10
     return round(min(score, 100))
+
+
+def _other_text(row_nr: dict, prefix: str) -> str:
+    """The free text typed in a question's 'Other' box, located by header.
+
+    Qualtrics names these '<question>_<n>_TEXT' and the <n> differs between
+    exports (QID148 'Cooking _9_TEXT' carries ImportId QID148_4_TEXT), so match
+    on the prefix and the _TEXT suffix rather than a fixed name.
+    """
+    for k, v in row_nr.items():
+        if k.startswith(prefix) and k.upper().endswith('_TEXT'):
+            t = _cell(row_nr, k)
+            if t:
+                return t
+    return ''
+
+
+def _cooks_with_combustion(row_nr: dict) -> bool:
+    """Gas or propane stove, from the ticked choice OR the 'Other:' text.
+
+    R_dGTyY060JYUPQkh ticked only 'Other:' and wrote 'Propane camp stove'; the
+    stated +10 gas/propane rule never saw it. The text is consulted only when
+    'Other' was ticked, so a stray text cell cannot add points by itself.
+    """
+    stove = str(row_nr.get('Cooking', '') or '').lower()
+    if any(kw in stove for kw in ('gas', 'propane')):
+        return True
+    if 'other' not in stove:
+        return False
+    txt = _other_text(row_nr, 'Cooking').lower()
+    return any(kw in txt for kw in ('gas', 'propane'))
 
 
 def _cell(row_map: dict, key: str) -> str:
