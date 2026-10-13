@@ -489,7 +489,13 @@ def _apply_qsf_display_labels(df_full, qid_to_col_idx: dict) -> dict:
             col_to_qid[col_idx] = (qid_key, m.group(1))
 
     changed: dict = {}
-    for col_idx, (_qid_key, base) in col_to_qid.items():
+    for col_idx, (qid_key, base) in col_to_qid.items():
+        # A text-entry column (ImportId ...'_TEXT') holds what the respondent
+        # TYPED. Its base QID's choice map is for the selected-choice column,
+        # so translating it rewrote a typed '1' (years in HRE, QID12_TEXT) as
+        # QID12's choice label 'Year(s)' for 9 respondents.
+        if str(qid_key).upper().endswith('_TEXT'):
+            continue
         col = df_full.columns[col_idx]
         original = df_full[col]
 
@@ -1002,21 +1008,38 @@ def _val_at_orig_idx(full_row, orig_idx):
     return str(v).strip()
 
 
+# A leading number, an optional unit word, then end / space / ',' / '+' / '.'.
+# '6/25' (a date) and 'Last month' (no number) do not match: never guessed.
+_YEARS_RE = re.compile(r'^(\d+(?:\.\d+)?|\.\d+)\s*([a-z]*)(?:[\s,+.]|$)')
+
+
 def _parse_years_numeric(v):
-    """Parse a free-text years answer (e.g. '10', '10 years', '10 yrs', '5.5')
-    into a float. Returns None on parse failure."""
+    """Parse a free-text years answer into years as a float.
+
+    Accepts '10', '10 years', '10 yrs', '1yr', '7 y', '30 yeads' (typo),
+    '5.5', '.5', '10+', '12 yrs, family home for 20' (the leading figure is
+    the answer). Month answers — '5 months', '5months', '2mo', '3 mo' — are
+    converted to years (n / 12). Returns None when there is no leading number
+    or the unit is not a year/month word.
+    """
     if v is None:
         return None
     s = str(v).strip().lower()
     if not s or s in ('nan', 'none'):
         return None
-    s = (s.replace('years', '').replace('year', '')
-          .replace('yrs', '').replace('yr', '')
-          .strip().rstrip('+').strip())
+    m = _YEARS_RE.match(s)
+    if not m:
+        return None
     try:
-        return float(s)
+        n = float(m.group(1))
     except (ValueError, TypeError):
         return None
+    unit = m.group(2)
+    if unit.startswith('mo'):
+        return round(n / 12.0, 4)
+    if unit == '' or unit.startswith('y'):
+        return n
+    return None
 
 
 def _build_colname_qid_map(df_columns) -> dict:
