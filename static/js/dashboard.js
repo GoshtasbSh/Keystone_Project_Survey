@@ -59,6 +59,32 @@ let panelSizes = { sidebar: 280, analysis: 300, chat: 340 };
 let activeStreetHighlight = null;   // string[] | null
 let _resultsCharts = {};
 
+// ==== PURE-HELPERS BEGIN (loaded by tests/js/load_pure.mjs: no DOM, no map, no globals) ====
+
+// Numeric-coded Qualtrics exports are decoded server-side; placeholders stay visible here as muted text.
+const _IAQ_PLACEHOLDER_RE = /^(click to write (scale point|choice)\s*\d*|skip(ped)?|no answer|--)$/i;
+
+/** @returns {{ text: string, muted: boolean }} */
+function formatIaqAnswerCell(key, raw) {
+  if (key === 'has_mold') {
+    if (raw === true || raw === 'true' || raw === 1 || raw === '1') {
+      return { text: 'Yes', muted: false };
+    }
+    if (raw === false || raw === 'false' || raw === 0 || raw === '0') {
+      return { text: 'No', muted: false };
+    }
+  }
+  if (raw == null) return { text: '—', muted: true };
+  const s = String(raw).trim();
+  if (!s) return { text: '—', muted: true };
+  if (_IAQ_PLACEHOLDER_RE.test(s)) {
+    return { text: `${s} (Qualtrics placeholder)`, muted: true };
+  }
+  return { text: s, muted: false };
+}
+
+// ==== PURE-HELPERS END ====
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 function fmt(n) {
   if (n == null) return '—';
@@ -1617,28 +1643,6 @@ const _RAW_IAQ_LABELS = {
   cooling_none:        'What type of cooling system do you use and how old is it? (check all that apply) - No Air-conditioning',
   cooking_method:      'What stove type do you have in your home? \r\nPlease select all options that apply. - Selected Choice',
 };
-
-// Numeric-coded Qualtrics exports are decoded server-side; placeholders stay visible here as muted text.
-const _IAQ_PLACEHOLDER_RE = /^(click to write (scale point|choice)\s*\d*|skip(ped)?|no answer|--)$/i;
-
-/** @returns {{ text: string, muted: boolean }} */
-function formatIaqAnswerCell(key, raw) {
-  if (key === 'has_mold') {
-    if (raw === true || raw === 'true' || raw === 1 || raw === '1') {
-      return { text: 'Yes', muted: false };
-    }
-    if (raw === false || raw === 'false' || raw === 0 || raw === '0') {
-      return { text: 'No', muted: false };
-    }
-  }
-  if (raw == null) return { text: '—', muted: true };
-  const s = String(raw).trim();
-  if (!s) return { text: '—', muted: true };
-  if (_IAQ_PLACEHOLDER_RE.test(s)) {
-    return { text: `${s} (Qualtrics placeholder)`, muted: true };
-  }
-  return { text: s, muted: false };
-}
 
 function buildSurveyAnswersTab(iaqProps) {
   const qtext = { ..._RAW_IAQ_LABELS, ...(iaqAnalysis?.survey_questions || {}) };
