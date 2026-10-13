@@ -2031,7 +2031,9 @@ def _compute_iaq_analysis(features: list) -> dict:
                 'median':      round(float(yrs_median), 1),
                 'distribution': dict(yrs_bins),
             },
-            'anticipated_stay': _bin_counts('anticipated_stay'),
+            # QID47 is multi-answer: '1-5 years,6-10 years' counts once in
+            # each option's bar, not as a third, combined category.
+            'anticipated_stay': _multi_counts('anticipated_stay', 'QID47'),
             'mh_skirting':      _bin_counts('mh_skirting'),
             'reloc_factors':    {f: _bin_counts(f) for f in RELOC_FIELDS},
         },

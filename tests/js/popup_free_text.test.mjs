@@ -21,3 +21,7 @@ function categoryOf(key) {
 test('the specific hospital choice is listed under Health', () => {
   assert.equal(categoryOf('hospital_visit_detail'), 'Health & Symptoms');
 });
+
+test('skirting card no longer claims skip-logic (all 114 answered)', () => {
+  assert.ok(!src.includes('responses (skip-logic)'));
+});

@@ -4678,7 +4678,7 @@ function buildSurveyResultsTab(data) {
       <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:8px">
         <div class="stat-card"><div class="label">Years in HRE — mean</div><div class="value" style="font-size:18px">${(residency.years_in_hre||{}).mean ?? '—'}</div><div class="sub">n=${(residency.years_in_hre||{}).n_valid||0} parsed</div></div>
         <div class="stat-card"><div class="label">Years in HRE — median</div><div class="value" style="font-size:18px">${(residency.years_in_hre||{}).median ?? '—'}</div><div class="sub">free-text → numeric</div></div>
-        <div class="stat-card"><div class="label">Mobile-home skirting</div><div class="value" style="font-size:18px">${Object.values(residency.mh_skirting||{}).reduce((s,n)=>s+(n||0),0)}</div><div class="sub">responses (skip-logic)</div></div>
+        <div class="stat-card"><div class="label">Mobile-home skirting</div><div class="value" style="font-size:18px">${Object.values(residency.mh_skirting||{}).reduce((s,n)=>s+(n||0),0)}</div><div class="sub">responses</div></div>
         <div class="stat-card"><div class="label">Affordability strategy</div><div class="value" style="font-size:18px">${Object.keys(affordability.strategy||{}).length}</div><div class="sub">options chosen</div></div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
