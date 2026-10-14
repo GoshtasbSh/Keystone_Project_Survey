@@ -23,6 +23,15 @@ from _lib import (
     supabase_admin, load_cached, json_response, empty_geojson, haversine_m,
     _bearer_jwt, supabase_anon, merge_preserve_analysis,
 )
+from _field_layer import (
+    FIELD_COLS_BASE as _FIELD_COLS_BASE,
+    FIELD_COLS_ENRICHED as _FIELD_COLS_ENRICHED,
+    field_row_to_feature, load_all_field_rows, rebuild_field_layer,
+    is_field_feature, features_signature,
+)
+from _dashboard_writes import (
+    commit_dashboard_writes, load_blob_with_stamp, StaleWriteError,
+)
 import hmac as _hmac
 
 # Status colours — mirrors _processing.STATUS so the analysis blob is consistent
@@ -39,13 +48,6 @@ _STATUS_COLORS = {
     "Unknown":        "#9ca3af",
 }
 LOCAL_TZ = ZoneInfo("America/New_York")
-
-# I7 fix (2026-08-10): tolerate migration 27 (the optional `address` column
-# on field_survey_points) not being applied yet, same pattern as
-# api/upload.py's _FIELD_COLS_BASE / _FIELD_COLS_ENRICHED. Try the enriched
-# select first; the caller falls back to the base columns on ANY exception.
-_FIELD_COLS_BASE     = "id, lat, lon, status, notes, collector_id, collector_name, collected_at"
-_FIELD_COLS_ENRICHED = _FIELD_COLS_BASE + ", address"
 
 
 def _compute_analysis(features: list) -> dict:
@@ -186,254 +188,162 @@ def _persist_integrity_metrics(sb, iaq_feats: list, features: list) -> dict | No
 
 
 def _field_row_to_feature(row: dict) -> dict | None:
-    # NB (updated 2026-08-10, I7 fix): field_survey_points now carries an
-    # OPTIONAL `address` column (migration 27) that a surveyor may fill in
-    # at pin-placement time. This comment used to claim we "deliberately do
-    # not surface any address-like field here" — that was true before
-    # migration 27 existed, but is now false and contradicted api/upload.py:
-    # _field_row_to_feature, which already surfaces `address`. Without this,
-    # a surveyor's typed address only ever reached the map via a manual
-    # community-contact upload (api/upload.py), never via the 4x/day cron
-    # this function backs. `row.get("address")` is safe even against the
-    # base (pre-migration-27) select in _run_refresh, which never includes
-    # the key at all — it simply returns None.
-    lon = row.get("lon")
-    lat = row.get("lat")
-    if lon is None or lat is None:
-        return None  # skip rows with no valid coordinates
-    return {
-        "type": "Feature",
-        "geometry": {"type": "Point", "coordinates": [lon, lat]},
-        "properties": {
-            "source": "field",
-            "field_point_id": row.get("id"),
-            "status": row.get("status") or "Unknown",
-            "street_name": "Field Survey",  # mirrors app.py _field_pts_to_geojson_features
-            "notes": row.get("notes") or "",
-            "collector": row.get("collector_name"),
-            "collector_id": row.get("collector_id"),
-            "collected_at": row.get("collected_at"),
-            "address": row.get("address") or None,
-        },
-    }
+    # Single definition lives in _field_layer (shared with upload.py and
+    # versions.py); kept under this name for tests/importers.
+    return field_row_to_feature(row)
+
+
+def _match_field_to_iaq(field_feats: list, iaq_feats: list) -> int:
+    """Run the shared parcel-aware matcher; fall back to a tight 30 m
+    haversine when the parcel index cannot be built."""
+    if not (iaq_feats and field_feats):
+        return 0
+    try:
+        # Late import: keeps the function bundle slim when there is no work.
+        from _processing import load_parcel_index, _apply_iaq_to_field_features
+        parcel_idx = load_parcel_index()
+        return _apply_iaq_to_field_features(field_feats, iaq_feats, parcel_idx=parcel_idx)
+    except Exception as e:
+        print(f"[daily-refresh] parcel-aware match unavailable ({e}); "
+              f"falling back to 30 m distance.")
+    n = 0
+    for ff in field_feats:
+        f_lon, f_lat = ff["geometry"]["coordinates"]
+        for iaq_f in iaq_feats:
+            i_lon, i_lat = iaq_f["geometry"]["coordinates"]
+            if haversine_m(f_lat, f_lon, i_lat, i_lon) <= 30:
+                ff["properties"]["status"] = "Completed"
+                ff["properties"]["has_iaq_survey"] = True
+                iaq_f["properties"]["iaq_matched"] = True
+                n += 1
+                break
+    return n
 
 
 def _run_refresh() -> dict:
+    """Rebuild the field half of the community_contact blob from the
+    CURRENT field_survey_points table (audit 2026-10-13 F4/DEP-6/DEP-7).
+
+    The old version appended rows newer than a timestamp watermark and
+    never removed anything, so deleted pins lived on forever. Now:
+      * every table row becomes exactly one fresh field feature;
+      * a blob field feature whose row is gone is dropped;
+      * CSV contacts are left exactly as stored (tag + parcel dedup run
+        over contacts only — never over field pins, which used to let a
+        pin swallow a real contact);
+      * all writes go through one transaction with a compare-and-set on
+        the blobs read here, so an upload that lands mid-refresh is never
+        overwritten (StaleWriteError -> the handler retries once).
+    """
     sb = supabase_admin()
     if not sb:
         return {"refreshed": False, "reason": "Supabase service role key not configured"}
 
-    # Last snapshot timestamp
     try:
-        versions = (
-            sb.table("keystone_analysis_versions")
-            .select("created_at")
-            .eq("data_type", "community_contact")
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-        last_at = versions.data[0]["created_at"] if versions.data else "2000-01-01T00:00:00Z"
-    except Exception as e:
-        return {"refreshed": False, "reason": f"Could not read versions: {e}"}
-
-    # New field points since then — paginate to avoid silent 1000-row PostgREST cap.
-    cap_reached = False
-    try:
-        new_rows: list = []
-        PAGE = 1000
-        HARD_CAP = 100_000
-        offset = 0
-        # I7 fix: try the enriched (+address) select first; tolerate
-        # migration 27 not being applied yet by falling back to the base
-        # columns on ANY exception, once, at the first page — mirrors
-        # api/upload.py's _load_all_field_features fallback pattern.
-        cols = _FIELD_COLS_ENRICHED
-        while offset < HARD_CAP:
-            try:
-                page = (
-                    sb.table("field_survey_points")
-                    .select(cols)
-                    .gt("collected_at", last_at)
-                    .range(offset, offset + PAGE - 1)
-                    .execute()
-                ).data or []
-            except Exception as e:
-                if cols is _FIELD_COLS_ENRICHED:
-                    print(f"[daily-refresh] field_survey_points select with address "
-                          f"failed ({type(e).__name__}: {e}) — retrying without it "
-                          f"(migration 27 not applied?)")
-                    cols = _FIELD_COLS_BASE
-                    continue
-                raise
-            if not page:
-                break
-            new_rows.extend(page)
-            if len(page) < PAGE:
-                break
-            offset += PAGE
-        cap_reached = offset >= HARD_CAP and len(new_rows) >= HARD_CAP
-        if cap_reached:
-            print(f"[daily-refresh] WARNING: field_survey_points capped at {HARD_CAP} rows — "
-                  "points beyond this limit were NOT merged. Investigate if table is large.")
+        field_rows = load_all_field_rows(sb, "[daily-refresh]")
     except Exception as e:
         return {"refreshed": False, "reason": f"Could not read field points: {e}"}
 
-    # NOTE: even when no new field rows have arrived since the last
-    # snapshot we still fall through and re-run the IAQ matcher against
-    # the cached blob. Reason: the v3 matcher used to skip Completed
-    # field pins, so any Completed pins added historically may still be
-    # missing has_iaq_survey + iaq_matched. This idempotent re-pass
-    # backfills them. We only persist + version-snapshot when something
-    # actually changed (n_iaq_upgraded > 0 OR new_rows > 0 OR iaq blob
-    # flipped) so unchanged invocations remain a no-op.
+    try:
+        existing, cc_stamp = load_blob_with_stamp(sb, "community_contact")
+        iaq_stored, iaq_stamp = load_blob_with_stamp(sb, "iaq_survey")
+    except Exception as e:
+        # Never treat "could not read" as "empty": that would rewrite the
+        # blob with field pins only and wipe every CSV contact.
+        return {"refreshed": False, "reason": f"Could not read cached blobs: {e}"}
 
-    # Load existing cached community-contact blob and append.
-    # NB: must use 'community_contact' — the data_type every read endpoint queries.
-    # (Earlier versions used 'survey_points', which was a dead key.)
-    existing = load_cached("community_contact") or empty_geojson()
-    features = list(existing.get("features") or [])
-    new_features = [f for f in (_field_row_to_feature(r) for r in new_rows) if f is not None]
+    existing = existing or empty_geojson()
+    old_features = list(existing.get("features") or [])
+    # Taken before the tagger mutates the contact dicts in place.
+    old_sig = features_signature(old_features)
+    features, report = rebuild_field_layer(old_features, field_rows)
+    contacts = [f for f in features if not is_field_feature(f)]
+    field_feats = [f for f in features if is_field_feature(f)]
 
-    # Upgrade new field points that have a Qualtric IAQ survey for the
-    # SAME parcel. v3 (2026-05-05): use _processing.load_parcel_index +
-    # _apply_iaq_to_field_features so daily-refresh and upload share the
-    # exact same parcel-aware logic. Falls back to a tight 30 m haversine
-    # if the parcel index can't be built (e.g. cached blob missing).
-    iaq_stored = load_cached("iaq_survey") or {}
+    iaq_stored = iaq_stored or {}
     iaq_feats = (iaq_stored.get("geojson") or {}).get("features") or []
-    n_iaq_upgraded = 0
-    # Snapshot iaq_matched per IAQ feature so we can detect downstream
-    # flips and persist the iaq_survey blob only when something changed.
     iaq_matched_before = [bool((f.get("properties") or {}).get("iaq_matched"))
                           for f in iaq_feats]
-    # Append new rows BEFORE running the matcher — we want the matcher
-    # to also re-evaluate pre-existing field points (e.g. yesterday's
-    # Completed pins that the buggy v3 matcher skipped) so they finally
-    # pick up has_iaq_survey + iaq_matched. The matcher is idempotent.
-    features.extend(new_features)
-    field_features_for_match = [
-        f for f in features
-        if (f.get("properties") or {}).get("source") == "field"
-    ]
-    if iaq_feats and field_features_for_match:
-        try:
-            # Late import: keeps the daily-refresh function bundle slim
-            # when the IAQ blob is empty (no upgrade work to do).
-            from _processing import load_parcel_index, _apply_iaq_to_field_features
-            parcel_idx = load_parcel_index()
-            n_iaq_upgraded = _apply_iaq_to_field_features(
-                field_features_for_match, iaq_feats, parcel_idx=parcel_idx)
-        except Exception as e:
-            print(f"[daily-refresh] parcel-aware match unavailable ({e}); "
-                  f"falling back to 30 m distance.")
-            for ff in field_features_for_match:
-                if ff["properties"].get("has_iaq_survey"):
-                    continue
-                f_lon, f_lat = ff["geometry"]["coordinates"]
-                for iaq_f in iaq_feats:
-                    i_lon, i_lat = iaq_f["geometry"]["coordinates"]
-                    if haversine_m(f_lat, f_lon, i_lat, i_lon) <= 30:
-                        ff["properties"]["status"] = "Completed"
-                        ff["properties"]["has_iaq_survey"] = True
-                        iaq_f["properties"]["iaq_matched"] = True
-                        n_iaq_upgraded += 1
-                        break
+    _match_field_to_iaq(field_feats, iaq_feats)
 
-    merged = {"type": "FeatureCollection", "features": features}
-
-    # Tag every Completed contact / field-as-feature with match_status
-    # (G1 = matched, G2 = contact_only) so the desktop map's stroke
-    # encoding stays correct after the daily-refresh append. Then dedup
-    # at the parcel rep-point so a freshly-appended field point at the
-    # same parcel as an existing CSV contact collapses to a single dot.
     try:
         from _processing import tag_contact_match_status, dedup_contacts_at_parcel
-        tag_contact_match_status(features)
-        features = dedup_contacts_at_parcel(features)
-        merged = {"type": "FeatureCollection", "features": features}
+        tag_contact_match_status(contacts)
+        contacts = dedup_contacts_at_parcel(contacts)
     except Exception as e:
         print(f"[daily-refresh] tag/dedup failed: {e}")
+    features = contacts + field_feats
+    merged = {**existing, "type": "FeatureCollection", "features": features}
 
-    local_day = datetime.now(LOCAL_TZ).date().isoformat()
-    label = f"Daily Update {local_day} — {len(new_rows)} new field visits ({len(features)} total)"
-
-    # Persist iaq_survey blob if any iaq_matched flag flipped during the
-    # field-point match pass. Without this, the IAQ-only dot keeps its
-    # G3 yellow rim on the map even though a field pin now ground-truths
-    # the parcel as 'matched' (G1, white rim).
     iaq_matched_after = [bool((f.get("properties") or {}).get("iaq_matched"))
                          for f in iaq_feats]
-    iaq_blob_changed = (iaq_matched_before != iaq_matched_after)
-    if iaq_blob_changed and iaq_stored:
-        try:
-            # Task 15: keep the stored match_status in sync with
-            # iaq_matched before writing — this blob is about to be
-            # persisted anyway (iaq_blob_changed), so this adds no new
-            # write, it just corrects what the existing write contains.
-            _refresh_iaq_match_status(iaq_feats)
-            iaq_payload = dict(iaq_stored)
-            geo = dict(iaq_payload.get("geojson") or {})
-            geo["features"] = iaq_feats
-            iaq_payload["geojson"] = geo
-            sb.table("keystone_dashboard_data").upsert({
-                "data_type": "iaq_survey",
-                "payload": iaq_payload,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }, on_conflict="data_type").execute()
-        except Exception as e:
-            print(f"[daily-refresh] iaq_survey blob persist failed: {e}")
+    iaq_blob_changed = bool(iaq_stored) and iaq_matched_before != iaq_matched_after
 
-    # Task 16: daily integrity metrics — a NEW data_type='integrity_metrics'
-    # row, computed on every tick regardless of whether anything else
-    # changed. Never touches community_contact / iaq_survey / analysis /
-    # parcel_address_index.
+    # Task 16: daily heartbeat row, written every tick (its own data_type).
     _persist_integrity_metrics(sb, iaq_feats, features)
 
-    # Persist merged blob + version snapshot — but only when something
-    # actually changed. Empty refresh ticks (no new rows AND no IAQ
-    # backfill) skip the write so we don't churn the version table.
-    something_changed = bool(new_rows) or n_iaq_upgraded > 0 or iaq_blob_changed
-    if not something_changed:
-        return {"refreshed": False, "reason": "No new field data and no IAQ backfill needed",
-                "last_analysis": last_at}
-    try:
-        sb.table("keystone_dashboard_data").upsert({
-            "data_type": "community_contact",
-            "payload": merged,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }, on_conflict="data_type").execute()
-        sb.table("keystone_analysis_versions").insert({
-            "data_type": "community_contact",
-            "payload": merged,
-            "label": label,
-            "n_points": len(features),
-        }).execute()
-    except Exception as e:
-        return {"refreshed": False, "reason": f"Write failed: {e}"}
+    contact_changed = old_sig != features_signature(features)
+    if not (contact_changed or iaq_blob_changed):
+        return {"refreshed": False,
+                "reason": "No field-point changes and no IAQ backfill needed"}
 
-    # Recompute and persist analysis stats so the dashboard's Analysis tab
-    # reflects today's field-point additions rather than the last upload.
-    # NB: scripts/ingest.py is the only thing that computes parcel_stats
-    # (needs geopandas/shapely — too heavy for a Vercel function). We must
-    # PRESERVE the previous analysis blob's parcel_stats and any other
-    # server-only fields so the Parcels tab stays populated. Without this
-    # merge, every daily-refresh tick wipes the parcel analysis.
+    local_day = datetime.now(LOCAL_TZ).date().isoformat()
+    n_new, n_removed = len(report["added"]), len(report["removed"])
+    label = (f"Daily Update {local_day} — {n_new} new field visits"
+             + (f", {n_removed} deleted pins removed" if n_removed else "")
+             + f" ({len(features)} total)")
+    if n_removed:
+        print(f"[daily-refresh] removed {n_removed} field features whose "
+              f"field_survey_points row no longer exists: {report['removed_details']}")
+
+    blobs = [{"data_type": "community_contact", "payload": merged}]
+    if iaq_blob_changed:
+        # Task 15: keep stored match_status in sync with iaq_matched.
+        _refresh_iaq_match_status(iaq_feats)
+        iaq_payload = dict(iaq_stored)
+        geo = dict(iaq_payload.get("geojson") or {})
+        geo["features"] = iaq_feats
+        iaq_payload["geojson"] = geo
+        blobs.append({"data_type": "iaq_survey", "payload": iaq_payload})
     try:
-        # Single shared helper now lives in _lib so the upload, restore,
-        # and daily-refresh paths all preserve parcel_stats identically.
-        recomputed = merge_preserve_analysis(_compute_analysis(features))
-        sb.table("keystone_dashboard_data").upsert({
-            "data_type": "analysis",
-            "payload": recomputed,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }, on_conflict="data_type").execute()
+        # parcel_stats etc. are preserved from the cached analysis (Vercel
+        # cannot recompute them) — same helper as upload and restore.
+        blobs.append({"data_type": "analysis",
+                      "payload": merge_preserve_analysis(_compute_analysis(features))})
     except Exception as e:
         print(f"[daily-refresh] analysis recompute failed: {e}")
 
-    return {"refreshed": True, "new_field_points": len(new_rows),
+    try:
+        commit_dashboard_writes(
+            sb, blobs,
+            versions=[{"data_type": "community_contact", "payload": merged,
+                       "label": label, "n_points": len(features)}],
+            expected={"community_contact": cc_stamp, "iaq_survey": iaq_stamp},
+        )
+    except StaleWriteError:
+        raise
+    except Exception as e:
+        return {"refreshed": False, "reason": f"Write failed: {e}"}
+
+    return {"refreshed": True, "new_field_points": n_new,
+            "removed_field_points": n_removed,
+            "restored_contacts": report["restored_contacts"],
             "total_points": len(features), "label": label,
-            "cap_reached": cap_reached}
+            "cap_reached": len(field_rows) >= 100_000}
+
+
+def _run_refresh_with_retry() -> dict:
+    """An upload (or a field-pin delete) that commits between our read and
+    our write makes the compare-and-set refuse the write; re-read and try
+    once more, then give up until the next tick."""
+    for attempt in (1, 2):
+        try:
+            return _run_refresh()
+        except StaleWriteError as e:
+            print(f"[daily-refresh] attempt {attempt}: {e}")
+    return {"refreshed": False,
+            "reason": "Dashboard data changed during the refresh (concurrent upload); "
+                      "skipped — the next run will pick everything up."}
 
 
 def _cron_authorized(handler_obj) -> bool:
@@ -563,7 +473,7 @@ class handler(BaseHTTPRequestHandler):
                 })
                 return
         try:
-            result = _run_refresh()
+            result = _run_refresh_with_retry()
             json_response(self, 200, result)
         except Exception as e:
             json_response(self, 500, {"error": str(e)})

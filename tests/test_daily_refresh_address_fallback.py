@@ -109,6 +109,8 @@ class _FakeSupabaseForRefresh:
             if self._fail_address_select and "address" in cols:
                 raise Exception('column field_survey_points.address does not exist')
             return _FakeResult(self._field_rows)
+        if table == "keystone_dashboard_data" and op == "select":
+            return _FakeResult([])  # no stored blobs yet (row absent)
         if table == "keystone_dashboard_data" and op == "upsert":
             self.upserts.append(payload)
             return _FakeResult([payload])
