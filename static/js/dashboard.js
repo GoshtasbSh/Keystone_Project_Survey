@@ -1884,6 +1884,10 @@ const _IAQ_NON_ANSWER_FIELDS = new Set([
   'status_detail', 'parcel_id', 'parcel_lon', 'parcel_lat',
   'source', 'field_point_id', 'coincident_contacts',
   'superseded', 'superseded_by', 'superseded_response_ids', 'household_responses',
+  // Matching / household bookkeeping (2026-10) — not survey answers
+  // (recorded_date is listed with the Qualtrics metadata above)
+  'house_number', 'match_review', 'match_review_note',
+  'restored_from_field_pin',
 ]);
 
 // Survey-question category structure — mirrors the analysis charts'
@@ -1973,6 +1977,13 @@ function buildSurveyAnswersTab(iaqProps) {
   const dupNote = earlier.length
     ? `<div style="margin:2px 0 8px;padding:6px 8px;border-radius:6px;background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.3);font-size:10.5px;color:var(--text2);line-height:1.4">This household answered ${earlier.length + 1} times. Only this latest response is used in the analysis; the earlier response${earlier.length === 1 ? ' was' : 's were'} excluded: ${earlier.map(e => escapeHtml(e.response_id) + (e.recorded_date ? ` (${escapeHtml(e.recorded_date.slice(0, 10))})` : '')).join(', ')}.</div>`
     : '';
+  // MATCH-1 flags a response whose typed house number differs from the
+  // contact on the parcel point it landed on (6318 on 6306 Amherst, 6378
+  // on 6376 Antioch). The server note already ends "not linked
+  // automatically.", so it is shown as-is (no second sentence or period).
+  const reviewNote = props.match_review === 'house_number_mismatch'
+    ? `<div style="margin:2px 0 8px;padding:6px 8px;border-radius:6px;background:rgba(249,115,22,.10);border:1px solid rgba(249,115,22,.35);font-size:10.5px;color:var(--text2);line-height:1.4">Needs review: ${escapeHtml(props.match_review_note || 'The typed house number differs from the contact on this parcel point; not linked automatically.')}</div>`
+    : '';
 
   // The label is shown in full and never truncated: it is the survey's own
   // question wording, so a reader must be able to select it and find that
@@ -2027,6 +2038,7 @@ function buildSurveyAnswersTab(iaqProps) {
 
   return `<div class="popup-body" style="max-height:380px;overflow-y:auto;padding-right:4px">
     ${dupNote}
+    ${reviewNote}
     <div class="popup-row">
       <span class="popup-label">Risk score</span>
       <span class="popup-value" style="font-family:var(--mono)"><strong>${Number(props.overall_risk) || 0}</strong>/100 · ${escapeHtml(props.risk_tier || '—')}</span>
