@@ -88,3 +88,56 @@ def test_a_superseded_answer_drawn_on_the_map_fails():
     R = {'R_5LnXMcaezhqW28F': {'finished': '1', 'status': '0'}}
     fails = RR.check(R, iaq, {'features': []}, field_rows=[])[0]
     assert any(f.startswith('drawn ids') for f in fails)
+
+
+def _canvass(cid, address, status='Completed', lon=-82.0, **props):
+    base = {'id': cid, 'address': address, 'status': status, 'status_detail': 'done',
+            'notes': '', 'date': '2026-01-10', 'second_attempt': ''}
+    return {'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': [lon, 29.78]},
+            'properties': {**base, **props}}
+
+
+def _before_after():
+    before = [_canvass(53, '6306 Amherst Ave'), _canvass(100, '6376 Antioch'),
+              _canvass(7, '6100 Harvard Ave', lon=-82.1),
+              {'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': [-82.2, 29.7]},
+               'properties': {'source': 'field', 'field_point_id': 'p1'}}]
+    after = [_canvass(53, '6306 Amherst Ave', status='No Answer'),
+             _canvass(100, '6376 Antioch', status='Follow Up'),
+             _canvass(7, '6100 Harvard Ave', lon=-82.1, match_status='matched', has_iaq_survey=True),
+             _canvass(191, '6386 Baylor', restored_from_field_pin='b989a847')]
+    return before, after
+
+
+def test_canvass_contacts_survive_with_only_the_documented_changes():
+    before, after = _before_after()
+    assert RR.compare_canvass_contacts(before, after) == []
+
+
+def test_lost_duplicated_or_edited_canvass_contact_fails():
+    before, after = _before_after()
+    # drop one contact and duplicate another: same count, still caught
+    dup = [after[0], after[1], after[3], dict(after[3])]
+    fails = '\n'.join(RR.compare_canvass_contacts(before, dup))
+    assert 'contact 7 (6100 Harvard Ave) missing' in fails
+    assert 'duplicate contact id 191' in fails
+    for key, val in (('notes', 'edited'), ('status_detail', 'x'), ('date', '2026-02-02'),
+                     ('second_attempt', 'y'), ('address', '6101 Harvard Ave')):
+        b, a = _before_after()
+        a[2]['properties'][key] = val
+        assert any(key in f for f in RR.compare_canvass_contacts(b, a)), key
+    b, a = _before_after()
+    a[2]['geometry']['coordinates'] = [-82.1001, 29.78]
+    assert any('geometry' in f for f in RR.compare_canvass_contacts(b, a))
+
+
+def test_undocumented_status_change_or_new_contact_fails():
+    b, a = _before_after()
+    a[2]['properties']['status'] = 'Refused'
+    assert any('status' in f for f in RR.compare_canvass_contacts(b, a))
+    b, a = _before_after()
+    a.append(_canvass(500, '1 New St'))
+    assert any('unexpected new contact 500' in f for f in RR.compare_canvass_contacts(b, a))
+    b, a = _before_after()
+    a[3]['properties'].pop('restored_from_field_pin')
+    assert any('unexpected new contact 191' in f for f in RR.compare_canvass_contacts(b, a))

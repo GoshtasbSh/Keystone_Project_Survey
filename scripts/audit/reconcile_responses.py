@@ -18,7 +18,10 @@ It also checks the contact/field links the launch fixes promised:
 Usage:
   .venv/bin/python scripts/audit/reconcile_responses.py \
       --csv "../Keystone_Data/Keystone Heights Survey - V1_October 7, 2026_00.47.csv" \
-      --snap "$GATE/after"
+      --snap "$GATE/after" --before "$GATE/before"
+--before also requires every canvass contact of the baseline to be present
+by id with the same address, notes, status_detail, date, second_attempt and
+geometry (status only as documented); only the restored contacts are new.
 Exit 0 = every check passed.
 """
 from __future__ import annotations
@@ -80,6 +83,16 @@ TEST_PIN_IDS = {
     'c902d618-c2cf-40f2-9b6d-23667e12a002', 'cb4783e1-b9af-4110-a5d2-8f2bcd785feb',
     'd082063a-d9de-43dc-b1c2-06ab2e015b87', 'd671b9ef-2db8-4f08-94c9-29321ec7c25a',
     'e31020f0-384a-40d0-b4b3-78c2705c5620', 'ec1db343-7c4a-4df6-b58a-51149fffea41'}
+# --before: the canvass contacts must survive the cleanup and the re-upload.
+# Compared by id; these columns must be identical, and status may change only
+# as documented. Only the contacts restored from test pins may be new.
+CANVASS_FIELDS = ('address', 'notes', 'status_detail', 'date', 'second_attempt')
+EXPECTED_RESTORED_CONTACT_IDS = {120, 191}   # 6393 Cascade, 6386 Baylor (UP-11 cleanup)
+# MATCH-2 un-links a neighbour's survey; the contact goes back to its canvass status.
+ALLOWED_STATUS_CHANGES = {
+    53: ('6306 Amherst Ave', 'Completed', 'No Answer'),
+    100: ('6376 Antioch', 'Completed', 'Follow Up'),
+}
 # popup fields read from the QID42 water matrix: a non-empty CSV cell must
 # never reach the popup as an empty value (the "none" -> "—" bug)
 WATER_FIELDS = {'leakage_roof': 'QID42_1', 'leakage_walls': 'QID42_2',
@@ -222,10 +235,59 @@ def check(R, iaq, contacts, field_rows):
     return fails, info
 
 
+def _canvass(features):
+    return [f for f in features or []
+            if (f.get('properties') or {}).get('source') != 'field'
+            and (f.get('properties') or {}).get('field_point_id') is None]
+
+
+def compare_canvass_contacts(before: list, after: list) -> list:
+    """Failures unless every canvass contact in `before` is in `after` (by id)
+    with the same address, notes, status_detail, date, second_attempt and
+    geometry; status changes only as ALLOWED_STATUS_CHANGES documents; and
+    the only new contacts are the restored ones. Count-neutral swaps (one
+    contact lost, another duplicated) are caught too."""
+    fails = []
+    b_by_id = {}
+    for f in _canvass(before):
+        b_by_id[f['properties'].get('id')] = f
+    a_by_id = {}
+    for f in _canvass(after):
+        cid = f['properties'].get('id')
+        if cid in a_by_id:
+            fails.append(f'duplicate contact id {cid} ({f["properties"].get("address")})')
+        a_by_id[cid] = f
+    for cid, bf in b_by_id.items():
+        bp = bf['properties']
+        af = a_by_id.get(cid)
+        if af is None:
+            fails.append(f'contact {cid} ({bp.get("address")}) missing after')
+            continue
+        ap_ = af['properties']
+        for k in CANVASS_FIELDS:
+            if bp.get(k) != ap_.get(k):
+                fails.append(f'contact {cid} ({bp.get("address")}) {k} changed: '
+                             f'{bp.get(k)!r} -> {ap_.get(k)!r}')
+        if bf.get('geometry') != af.get('geometry'):
+            fails.append(f'contact {cid} ({bp.get("address")}) geometry changed')
+        if bp.get('status') != ap_.get('status'):
+            allowed = ALLOWED_STATUS_CHANGES.get(cid)
+            if allowed != (bp.get('address'), bp.get('status'), ap_.get('status')):
+                fails.append(f'contact {cid} ({bp.get("address")}) status changed: '
+                             f'{bp.get("status")!r} -> {ap_.get("status")!r}')
+    for cid in a_by_id.keys() - b_by_id.keys():
+        ap_ = a_by_id[cid]['properties']
+        if cid not in EXPECTED_RESTORED_CONTACT_IDS or not ap_.get('restored_from_field_pin'):
+            fails.append(f'unexpected new contact {cid} ({ap_.get("address")})')
+    return fails
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--csv', required=True)
     ap.add_argument('--snap', required=True, help='folder written by launch_snapshot.py')
+    ap.add_argument('--before', default=None,
+                    help='baseline snapshot folder: every canvass contact must survive unchanged')
     a = ap.parse_args(argv)
     snap = Path(a.snap)
     R = load_csv(a.csv)
@@ -236,6 +298,15 @@ def main(argv=None):
     with open(snap / 'field_survey_points.json') as fh:
         field_rows = json.load(fh)
     fails, info = check(R, iaq, contacts, field_rows)
+    if a.before:
+        with open(Path(a.before) / 'dd_community_contact.json') as fh:
+            before_contacts = json.load(fh)['payload']
+        canvass_fails = compare_canvass_contacts(before_contacts.get('features'),
+                                                 contacts.get('features'))
+        info['canvass_contacts'] = {'before': len(_canvass(before_contacts.get('features'))),
+                                    'after': len(_canvass(contacts.get('features'))),
+                                    'failures': len(canvass_fails)}
+        fails += canvass_fails
     print(json.dumps(info, indent=1))
     for f in fails:
         print('FAIL', f)
