@@ -4,6 +4,8 @@ POST /api/versions?id=<version_id> — restore a snapshot (admin-only).
 Consolidated from the previous api/versions.py (GET) + api/versions/restore.py (POST)
 to fit the Hobby plan's 12-function ceiling.
 """
+from __future__ import annotations
+
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -14,6 +16,23 @@ from _lib import (
     require_team_member, merge_preserve_analysis,
 )
 from _processing import compute_contact_analysis
+from _field_layer import load_all_field_rows, rebuild_field_layer, is_field_feature
+from _dashboard_writes import commit_dashboard_writes, load_blob_with_stamp
+
+
+def build_contact_restore(version_payload: dict, current_blob: dict | None,
+                          field_rows: list) -> tuple:
+    """Contacts come from the chosen version; field pins come from the
+    CURRENT field_survey_points table, never from the snapshot, so a
+    restore cannot bring back a pin that was deleted since (audit
+    2026-10-13 F4: 28 deleted test pins). Each pin keeps the survey link
+    it has in the current blob (the parcel matcher is not re-run here;
+    the nightly refresh re-derives it). Returns (payload, report)."""
+    feats, report = rebuild_field_layer(
+        version_payload.get("features") or [], field_rows,
+        carry_iaq_link_from=[f for f in (current_blob or {}).get("features") or []
+                             if is_field_feature(f)])
+    return {**version_payload, "features": feats}, report
 
 
 class handler(BaseHTTPRequestHandler):
@@ -67,34 +86,47 @@ class handler(BaseHTTPRequestHandler):
         payload = v["payload"]
 
         if "features" in payload:          # community_contact blob
-            sb.table("keystone_dashboard_data").upsert(
-                {"data_type": "community_contact", "payload": payload},
-                on_conflict="data_type",
-            ).execute()
             try:
-                contact_analysis = compute_contact_analysis(payload.get("features", []))
-                # Preserve parcel_stats etc. across the restore — same
-                # reason as the upload paths: Vercel can't recompute them.
-                contact_analysis = merge_preserve_analysis(contact_analysis)
-                sb.table("keystone_dashboard_data").upsert(
-                    {"data_type": "analysis", "payload": contact_analysis},
-                    on_conflict="data_type",
-                ).execute()
+                current, _ = load_blob_with_stamp(sb, "community_contact")
+                field_rows = load_all_field_rows(sb, "[versions]")
+            except Exception as e:
+                print(f"[versions] restore read failed: {e}")
+                json_response(self, 500, {"error": "Could not read current field points; nothing was restored."})
+                return
+            restored, report = build_contact_restore(payload, current, field_rows)
+            blobs = [{"data_type": "community_contact", "payload": restored}]
+            try:
+                # Preserve parcel_stats etc. — Vercel can't recompute them.
+                blobs.append({"data_type": "analysis", "payload": merge_preserve_analysis(
+                    compute_contact_analysis(restored["features"]))})
             except Exception as _e:
                 print(f"[versions] analysis recompute on restore failed: {_e}")
+            try:
+                commit_dashboard_writes(sb, blobs, [])
+            except Exception as e:
+                print(f"[versions] restore write failed: {type(e).__name__}: {e}")
+                json_response(self, 500, {"error": "Saving the restore failed. With migration 29 "
+                                                   "applied nothing was changed; check Vercel logs."})
+                return
+            print(f"[versions] restored id={version_id} points={len(restored['features'])} "
+                  f"field_removed={len(report['removed'])} "
+                  f"restored_contacts={report['restored_contacts']}")
             json_response(self, 200, {
                 "restored": True,
                 "type":     "community_contact",
                 "label":    v["label"],
-                "points":   len(payload.get("features", [])),
+                "points":   len(restored["features"]),
+                "field_points_removed": len(report["removed"]),
             })
             return
 
         if "geojson" in payload:           # iaq_survey blob
-            sb.table("keystone_dashboard_data").upsert(
-                {"data_type": "iaq_survey", "payload": payload},
-                on_conflict="data_type",
-            ).execute()
+            try:
+                commit_dashboard_writes(sb, [{"data_type": "iaq_survey", "payload": payload}], [])
+            except Exception as e:
+                print(f"[versions] restore write failed: {type(e).__name__}: {e}")
+                json_response(self, 500, {"error": "Saving the restore failed; check Vercel logs."})
+                return
             json_response(self, 200, {
                 "restored": True,
                 "type":     "iaq_survey",
