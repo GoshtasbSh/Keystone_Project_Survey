@@ -329,6 +329,13 @@ function splitExcludedDuplicates(features, supersededFeatures = []) {
   return { drawn, excluded, redirect, earlierByKept };
 }
 
+// Update Data -> Community card count. Once the live field points and the
+// community blob are loaded (liveReady), the card equals the legend's unified
+// total. Before that, the larger of the raw blob length and the live total.
+function communityCardCount(blobCount, liveTotal, liveReady) {
+  return liveReady ? liveTotal : Math.max(blobCount, liveTotal);
+}
+
 // ==== PURE-HELPERS END ====
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -1689,14 +1696,15 @@ async function renderDataSummary() {
       const payload = row.payload || {};
       if (c.countPath === 'features') n = (payload.features || []).length;
       else if (c.countPath === 'geojson.features') n = ((payload.geojson || {}).features || []).length;
-      // For community contacts, fold in real-time field-collected points so
-      // the card reflects what's on the map, not just the CSV upload.
-      // Unified count = sum of unified status counts (CSV + standalone field
-      // points, deduped by 30 m proximity).
+      // For community contacts, the card shows what's on the map: the same
+      // unified total as the Status legend (CSV contacts + live field points,
+      // each visit once, field copies of deleted pins pruned). The raw blob
+      // length counts every field copy plus its CSV contact, so it is only a
+      // fallback until the live field points and the blob have loaded.
       if (key === 'community_contact') {
         const live = computeUnifiedStatusCounts();
         const liveTotal = Object.values(live).reduce((s, v) => s + v, 0);
-        if (liveTotal > n) n = liveTotal;
+        n = communityCardCount(n, liveTotal, unifiedCountsReady());
       }
       if (countEl) { countEl.textContent = n.toLocaleString(); countEl.classList.remove('empty'); }
       if (whenEl) whenEl.textContent = `Updated ${_fmtRelative(row.updated_at)}`;
@@ -2444,6 +2452,12 @@ function stampCoincidentContacts() {
 // counts once. Standalone field points count on their own.
 function computeUnifiedStatusCounts() {
   return countUnifiedStatuses(surveyData?.features, fieldPointsData?.features, _fieldPointsAuthoritative);
+}
+
+// True once the unified counts are the legend's: the live field-point list is
+// authoritative and the community blob has been read into surveyData.
+function unifiedCountsReady() {
+  return _fieldPointsAuthoritative && !!(surveyData?.features?.length);
 }
 
 // ── Legend (unified: color picker + filter) ─────────────────────────────────

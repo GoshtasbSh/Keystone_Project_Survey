@@ -5,7 +5,7 @@
 // stub DOM, so the counts it renders are checked too.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readSource } from './load_pure.mjs';
+import { loadPure, readSource } from './load_pure.mjs';
 
 function sliceRenderDataSummary() {
   const src = readSource('static/js/dashboard.js');
@@ -59,9 +59,7 @@ test('Update Data modal fetches only community_contact, iaq_survey and parcels',
   const calls = [];
   const { els, document } = stubDom();
   // eslint-disable-next-line no-new-func
-  const render = new Function('sbClient', 'document', 'computeUnifiedStatusCounts', '_fmtRelative',
-    `"use strict";\n${sliceRenderDataSummary()}\nreturn renderDataSummary;`)(
-    fakeClient(calls), document, () => ({}), () => 'recently');
+  const render = makeRender(fakeClient(calls), document, {}, false);
   await render();
 
   const inCalls = calls.filter(c => c[0] === 'in');
@@ -75,4 +73,39 @@ test('Update Data modal fetches only community_contact, iaq_survey and parcels',
   assert.equal(els['ds-iaq-count'].textContent, (2).toLocaleString());
   assert.equal(els['ds-parcels-count'].textContent, (4).toLocaleString());
   assert.equal(els['ds-iaq-file'].textContent, 'i.csv');
+});
+
+const { communityCardCount } = loadPure(['communityCardCount']);
+
+// Runs the real renderDataSummary with the live unified counts and the
+// "live field points + blob loaded" flag supplied by the test.
+function makeRender(client, document, liveCounts, liveReady) {
+  // eslint-disable-next-line no-new-func
+  return new Function('sbClient', 'document', 'computeUnifiedStatusCounts', '_fmtRelative',
+    'communityCardCount', 'unifiedCountsReady',
+    `"use strict";\n${sliceRenderDataSummary()}\nreturn renderDataSummary;`)(
+    client, document, () => liveCounts, () => 'recently', communityCardCount, () => liveReady);
+}
+
+test('Update Data → Community card equals the legend total once the live pins have loaded', async () => {
+  // The blob holds 3 features (CSV contacts + field copies, possibly of deleted
+  // pins). The legend's unified total (copies pruned, each visit once) is 2.
+  const { els, document } = stubDom();
+  await makeRender(fakeClient([]), document, { Completed: 1, 'Not Home': 1 }, true)();
+  assert.equal(els['ds-community-count'].textContent, (2).toLocaleString());
+});
+
+test('before the live pins load, the card keeps the larger of blob and live counts', async () => {
+  let d = stubDom();
+  await makeRender(fakeClient([]), d.document, { Completed: 1 }, false)();
+  assert.equal(d.els['ds-community-count'].textContent, (3).toLocaleString());
+  d = stubDom();
+  await makeRender(fakeClient([]), d.document, { Completed: 5 }, false)();
+  assert.equal(d.els['ds-community-count'].textContent, (5).toLocaleString());
+});
+
+test('communityCardCount', () => {
+  assert.equal(communityCardCount(295, 283, true), 283);
+  assert.equal(communityCardCount(295, 283, false), 295);
+  assert.equal(communityCardCount(10, 12, false), 12);
 });
