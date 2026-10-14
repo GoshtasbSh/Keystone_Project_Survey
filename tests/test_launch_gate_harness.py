@@ -54,3 +54,35 @@ def test_search_check_finds_contact_address(tmp_path):
                        capture_output=True, text=True)
     assert r.returncode == 1
     assert '1/2 addresses found' in r.stdout and 'X-01' in r.stdout
+
+
+# ── GAP-9: the harness loads the PURE-HELPERS block and renders what a member sees ──
+
+def _dup_snap(tmp_path, earlier_date):
+    """One household answered twice (MATCH-3 shape): the kept answer is drawn,
+    the earlier one sits in geojson.superseded_features."""
+    kept = _feature('R_kept', [-82.0, 29.7], education='Graduate Degree',
+                    superseded_response_ids=['R_early'])
+    early = _feature('R_early', [-82.0, 29.7], education='nan', superseded=True,
+                     superseded_by='R_kept', recorded_date=earlier_date)
+    (tmp_path / 'dd_iaq_survey.json').write_text(json.dumps({'payload': {
+        'analysis': {'survey_questions': {}, 'shared_code_labels': {'verified': True, 'fields': []}},
+        'geojson': {'type': 'FeatureCollection', 'features': [kept], 'superseded_features': [early]}}}))
+    return tmp_path
+
+
+@pytest.mark.skipif(NODE is None, reason='node not installed')
+def test_popup_audit_renders_the_repeat_household_note_and_skips_the_earlier_answer(tmp_path):
+    js = str(ROOT / 'scripts' / 'audit' / 'popup_audit.js')
+    r = subprocess.run([NODE, js, str(_dup_snap(tmp_path, '2026-09-02 10:00:00'))], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr          # the earlier 'nan' answer is never drawn
+    assert '1 popups rendered, 0 failure(s)' in r.stdout
+    assert '1 popup(s) carry the repeat-household note' in r.stdout
+
+
+@pytest.mark.skipif(NODE is None, reason='node not installed')
+def test_popup_audit_checks_the_text_of_the_repeat_household_note(tmp_path):
+    # A broken date in the note ("undefined") is visible text and must fail.
+    js = str(ROOT / 'scripts' / 'audit' / 'popup_audit.js')
+    r = subprocess.run([NODE, js, str(_dup_snap(tmp_path, 'undefined'))], capture_output=True, text=True)
+    assert r.returncode == 1 and 'R_kept: popup text matches' in r.stdout, r.stdout + r.stderr

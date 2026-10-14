@@ -53,3 +53,40 @@ def test_required_ids_cover_every_audit_bucket():
     ids = set(PC.REQUIRED)
     assert {f'P{i}' for i in range(1, 24)} <= ids
     assert {'Q2-F3', 'Q2-F5', 'Q3-F2', 'Q3-I2', 'Q4-02', 'Q4-09'} <= ids
+
+
+# ── GAP-9: the restored canvass contacts are public, so the frozen allowlist must carry their flag ──
+
+def _load_api(modname: str, filename: str):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(modname, ROOT / 'api' / filename)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_restored_contact_flag_is_on_both_public_contact_allowlists():
+    for path in ('api/community-contacts', 'api/survey-points'):
+        assert 'restored_from_field_pin' in AP.ANON_ALLOWED[path], path
+
+
+def test_public_copy_of_a_restored_contact_stays_within_the_allowlist():
+    """UP-11 restores 6386 Baylor / 6393 Cascade from the pins that swallowed
+    them. Build that feature with the repo's own code, strip it the way each
+    public endpoint does, and require every key to be allowlisted (so the live
+    probe cannot fail on a restored contact after R4)."""
+    sys.path.insert(0, str(ROOT / 'api'))
+    import _field_layer as FL  # noqa: E402
+    host = {'geometry': {'type': 'Point', 'coordinates': [-82.0, 29.78]},
+            'properties': {'field_point_id': 'b989a847', 'source': 'field'}}
+    entry = {'status': 'Completed', 'street_name': 'Baylor Ave', 'notes': 'n',
+             'address': '6386 Baylor Ave', 'matched_address': '6386 BAYLOR AVE',
+             'collected_at': '2026-09-01T12:00:00Z'}
+    feat = FL._restore_swallowed_contact(entry, host, None)
+    assert feat['properties']['restored_from_field_pin'] == 'b989a847'
+    for path, filename in (('api/community-contacts', 'community-contacts.py'),
+                           ('api/survey-points', 'survey-points.py')):
+        mod = _load_api(f'_gap9_{filename.split(".")[0].replace("-", "_")}', filename)
+        public = mod._strip_pii({'type': 'FeatureCollection', 'features': [feat]})
+        keys = set(public['features'][0]['properties'])
+        assert keys <= AP.ANON_ALLOWED[path], (path, sorted(keys - AP.ANON_ALLOWED[path]))

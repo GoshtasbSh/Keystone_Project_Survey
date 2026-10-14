@@ -38,8 +38,12 @@ ANON_ALLOWED = {
                                'coord_source', 'date', 'field_point_id', 'has_iaq_survey',
                                'iaq_health_score', 'iaq_iaq_score', 'iaq_match_lat', 'iaq_match_lon',
                                'iaq_overall_risk', 'iaq_response_id', 'iaq_risk_tier', 'iaq_struct_score',
-                               'id', 'match_status', 'source', 'status'},
+                               'id', 'match_status', 'restored_from_field_pin', 'source', 'status'},
 }
+# GAP-9: restored_from_field_pin marks the 2 canvass contacts (6386 Baylor,
+# 6393 Cascade) that UP-11 restores from the pins that had swallowed them. It
+# holds only a pin id, and the contact endpoints strip by a PII blacklist, so it
+# is public.
 ANON_ALLOWED['api/survey-points'] = ANON_ALLOWED['api/community-contacts']
 # Fields that must be blank for anon even though the key is present.
 ANON_BLANK = {'api/field-points': ('notes', 'collector_id', 'guest_session_id')}

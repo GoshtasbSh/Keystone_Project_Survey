@@ -42,20 +42,35 @@ for (const [k, v] of Object.entries(ana)) if (!(k in iaqAnalysisShape)) iaqAnaly
 const BEGIN = '// ==== PURE-HELPERS BEGIN', END = '// ==== PURE-HELPERS END';
 // UI-1 moved formatIaqAnswerCell (and UI-5/7 helpers) into this block.
 const pureSrc = src.includes(BEGIN) ? sliceFn(BEGIN, END) : '';
-// Globals buildSurveyAnswersTab reads after UI-7 (empty: no duplicate notes in the audit).
+// Globals buildSurveyAnswersTab reads after UI-7. Empty by default; when the
+// pure block has splitExcludedDuplicates (UI-7/GAP-5) they are filled exactly
+// as the dashboard's applyIaqDuplicateRule does, so a kept answer's popup
+// carries the same "answered N times" note a member sees, and the drawn set
+// is the dashboard's own (earlier answers in geojson.superseded_features or
+// flagged superseded are never rendered).
 const stubs = 'var _iaqDupEarlierByKept = new Map(); var _iaqDupRedirect = new Map();\n';
+const fc = payload.geojson || {};
+const dupRule = `
+if (typeof splitExcludedDuplicates === 'function') {
+  const s = splitExcludedDuplicates(fc.features || [], fc.superseded_features || []);
+  _iaqDupEarlierByKept = s.earlierByKept; _iaqDupRedirect = s.redirect;
+  globalThis.__auditDrawn = s.drawn; globalThis.__auditDupNotes = s.earlierByKept;
+}`;
 globalThis.iaqAnalysis = iaqAnalysisShape;
 // eslint-disable-next-line no-eval
-eval(stubs + escSrc + pureSrc + popupSrc + ';globalThis.buildSurveyAnswersTab=buildSurveyAnswersTab;');
+eval(stubs + escSrc + pureSrc + popupSrc + ';globalThis.buildSurveyAnswersTab=buildSurveyAnswersTab;' + dupRule);
+const drawn = globalThis.__auditDrawn || (fc.features || []);
+const dupNotes = globalThis.__auditDupNotes || new Map();
 
 const text = (html) => html.replace(/<[^>]+>/g, '\n').replace(/&amp;/g, '&').replace(/&#39;/g, "'")
   .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 const fails = [];
-let n = 0;
-for (const f of payload.geojson.features) {
+let n = 0, withNote = 0;
+for (const f of drawn) {
   const p = f.properties;
   if (p[SUPERSEDED_KEY]) continue;
   n++;
+  if ((dupNotes.get(String(p.response_id || '').trim()) || []).length) withNote++;
   const t = text(buildSurveyAnswersTab(p));
   for (const re of BAD_TEXT) if (re.test(t)) fails.push(`${p.response_id}: popup text matches ${re}`);
   if (YEARS_ONE.includes(p.response_id) && /Year\(s\)/.test(String(p.years_in_hre)))
@@ -66,5 +81,6 @@ for (const f of payload.geojson.features) {
     fails.push('R_36hwtQ5ZQOhBucE: "no evidence to my knowledge" shown as mold');
 }
 fails.forEach((x) => console.log('FAIL', x));
+console.log(`${withNote} popup(s) carry the repeat-household note`);
 console.log(`${n} popups rendered, ${fails.length} failure(s)`);
 process.exit(fails.length ? 1 : 0);
