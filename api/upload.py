@@ -36,6 +36,7 @@ from _processing import (
     process_iaq_bytes, process_survey_bytes, compute_contact_analysis,
     _apply_iaq_to_field_features, tag_contact_match_status,
     dedup_contacts_at_parcel, RESULTS_PII_COLS, _build_validation_summary,
+    relink_contacts_to_stored_iaq,
 )
 from _field_layer import (
     FIELD_COLS_BASE as _FIELD_COLS_BASE,
@@ -645,9 +646,14 @@ class handler(BaseHTTPRequestHandler):
             print(f"[upload/survey] processing FAIL {type(e).__name__}: {e}\n{tb[:2000]}")
             return json_response(self, 500, {'detail': 'Processing failed — check Vercel logs.'})
 
-        # Fresh CSV upload starts with no IAQ tags (Completed -> 'contact_only'
-        # until the next IAQ upload), then parcel dedup of CONTACTS only.
+        # Fresh CSV rows carry no IAQ tags. Re-link them to the stored kept
+        # responses with the IAQ upload's matcher, so matched contacts (and
+        # the matched/contact_only counts the cron derives from them) survive
+        # a contacts upload; then tag and parcel-dedup CONTACTS only.
         contact_feats = survey_data.get('features', [])
+        iaq_feats = ((stored_iaq or {}).get('geojson') or {}).get('features') or []
+        n_relinked = relink_contacts_to_stored_iaq(contact_feats, iaq_feats)
+        print(f"[upload/survey] relinked {n_relinked} contacts to stored IAQ responses")
         tag_contact_match_status(contact_feats)
         contact_feats = dedup_contacts_at_parcel(contact_feats)
 
@@ -668,7 +674,6 @@ class handler(BaseHTTPRequestHandler):
             print(f"[upload/survey] field read FAIL {type(e).__name__}: {e}")
             return json_response(self, 500, {
                 'detail': 'Could not read the field survey points — nothing was changed. Check Vercel logs.'})
-        iaq_feats = ((stored_iaq or {}).get('geojson') or {}).get('features') or []
         if iaq_feats and field_feats:
             _apply_iaq_to_field_features(field_feats, iaq_feats, parcel_idx=parcel_idx)
         merged_feats = list(contact_feats) + list(field_feats)

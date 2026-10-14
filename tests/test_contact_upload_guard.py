@@ -183,6 +183,23 @@ class HandleSurveyTests(unittest.TestCase):
         self.assertTrue(params["p_versions"][0]["forced"])
         self.assertEqual(self.synced, [100])
 
+    def test_contacts_upload_keeps_the_stored_survey_links(self):
+        # U9a: fresh contacts carry no has_iaq_survey; without re-linking every
+        # Completed contact became contact_only until the next IAQ upload.
+        sb = _SB(277)
+        c = _contact(150)
+        sb.blobs["iaq_survey"] = {"geojson": {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "geometry": dict(c["geometry"]),
+             "properties": {"response_id": "R_kept", "house_number": "150", "overall_risk": 30,
+                            "risk_tier": "Low", "iaq_matched": True, "match_status": "matched"}}]}}
+        status, body = self._run(sb, 277)
+        self.assertEqual(status, 200)
+        feats = sb.rpcs[0][1]["p_blobs"][0]["payload"]["features"]
+        p = feats[150]["properties"]
+        self.assertEqual((p["iaq_response_id"], p["match_status"], p["status"]),
+                         ("R_kept", "matched", "Completed"))
+        self.assertNotIn("has_iaq_survey", feats[151]["properties"])
+
 
 if __name__ == "__main__":
     unittest.main()

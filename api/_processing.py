@@ -1622,7 +1622,10 @@ def _match_iaq_to_contacts(iaq_features: list, contact_features: list,
     for ii, iaq_f in enumerate(iaq_features):
         q212 = iaq_f['properties'].get('raw_address', '')
         iaq_lon, iaq_lat = iaq_f['geometry']['coordinates']
-        iaq_house = _house_number(q212)
+        # A stored response has no raw_address (PII stripped before saving)
+        # but keeps the house_number parsed from it, so tier 3 still works.
+        iaq_house = (_house_number(q212) if q212
+                     else str(iaq_f['properties'].get('house_number') or ''))
         matched_ci = None
 
         # Tier 1 + 2: address-based.
@@ -1681,6 +1684,28 @@ def _match_iaq_to_contacts(iaq_features: list, contact_features: list,
             matches[ii] = matched_ci
             used_contacts.add(matched_ci)
     return matches
+
+
+def relink_contacts_to_stored_iaq(contact_features: list, stored_iaq_features: list) -> int:
+    """Link freshly parsed contacts to the stored (kept) IAQ responses with
+    the same matcher an IAQ upload uses, so a contacts upload does not drop
+    every survey link until the next IAQ upload.
+
+    Stored responses carry no raw_address, so tiers 1-2 (typed address) are
+    skipped and tier 3 (same parcel point + same house number, from the
+    stored house_number) decides. The stored features are not mutated: the
+    matcher runs on per-feature property copies. Contacts are changed exactly
+    as by an IAQ upload (_upgrade_contacts_from_iaq). Returns the number of
+    contacts linked.
+    """
+    if not contact_features or not stored_iaq_features:
+        return 0
+    iaq_copies = [{'type': 'Feature', 'geometry': f['geometry'],
+                   'properties': dict(f.get('properties') or {})}
+                  for f in stored_iaq_features if f.get('geometry')]
+    _reset_contact_iaq_links(contact_features)
+    matches = _match_iaq_to_contacts(iaq_copies, contact_features)
+    return _upgrade_contacts_from_iaq(contact_features, iaq_copies, matches)
 
 
 def _cos_deg(deg: float) -> float:
