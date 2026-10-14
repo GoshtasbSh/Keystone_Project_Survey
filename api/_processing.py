@@ -2011,7 +2011,8 @@ def _apply_iaq_to_field_features(field_features: list, iaq_features: list,
          repeat-response parcel was an arbitrary one.
 
     Every matched pin gets the response's current scores, so a re-upload
-    refreshes stale copies. A pin whose stored ``iaq_response_id`` is no
+    refreshes stale copies. A matched pin keeps the status the surveyor
+    set; only a pin with no status (empty or 'Unknown') becomes Completed. A pin whose stored ``iaq_response_id`` is no
     longer among ``iaq_features`` (response removed or superseded) and
     that matches nothing now has its IAQ fields cleared; its status is
     left as the surveyor set it.
@@ -2098,8 +2099,13 @@ def _apply_iaq_to_field_features(field_features: list, iaq_features: list,
         if match_iaq is not None:
             ip = match_iaq['properties']
             ig = match_iaq['geometry']['coordinates']
-            props['status']           = 'Completed'
-            props['color']            = STATUS['Completed']
+            # The surveyor's status is their observation and is never
+            # overwritten ('Not Interested' stays so on the map and in the
+            # counts); only a pin with no status reads as Completed. The
+            # link itself is has_iaq_survey / iaq_*.
+            if props.get('status') in (None, '', 'Unknown'):
+                props['status'] = 'Completed'
+                props['color']  = STATUS['Completed']
             props['has_iaq_survey']   = True
             props['iaq_overall_risk'] = ip.get('overall_risk', 0)
             props['iaq_risk_tier']    = ip.get('risk_tier', '')

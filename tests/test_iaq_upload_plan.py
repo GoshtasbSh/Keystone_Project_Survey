@@ -56,9 +56,10 @@ class _Call:
 
 
 class _SB:
-    def __init__(self, contact_blob, rpc_error=None):
+    def __init__(self, contact_blob, rpc_error=None, field_rows=None):
         self.contact_blob = contact_blob
         self.rpc_error = rpc_error
+        self.field_rows = field_rows if field_rows is not None else [LIVE]
         self.writes = []
 
     def table(self, t):
@@ -77,7 +78,7 @@ class _SB:
             self.writes.append(("update", q.t, q.payload, q.f))
             return _Res([])
         if q.t == "field_survey_points":
-            return _Res([dict(LIVE)])
+            return _Res([dict(r) for r in self.field_rows])
         if q.t == "keystone_dashboard_data":
             if q.f.get("data_type") == "community_contact":
                 return _Res([{"payload": self.contact_blob, "updated_at": "t0"}])
@@ -144,6 +145,22 @@ class IaqUploadPlanTests(unittest.TestCase):
         labels = [v["label"] for v in plan["versions"]]
         self.assertTrue(any("1 deleted pins removed" in l for l in labels), labels)
         self.assertEqual(plan["versions"][0]["source_filename"], "oct.csv")
+
+    def test_linked_pin_keeps_its_status_and_is_still_written_back(self):
+        # A pin the surveyor marked otherwise keeps that status in the blob,
+        # and its row still gets iaq_matched (the link, not the status).
+        def link_keep_status(field_feats, iaq_feats, parcel_idx=None):
+            for ff in field_feats:
+                ff["properties"].update(has_iaq_survey=True, iaq_response_id="R_bt9KhSC0xqF2xuS")
+            iaq_feats[0]["properties"]["iaq_matched"] = True
+            return len(field_feats)
+        U._apply_iaq_to_field_features = link_keep_status
+        row = dict(LIVE, status="Not Interested")
+        blob = {"type": "FeatureCollection", "features": [_contact(), field_row_to_feature(row)]}
+        plan = U.prepare_iaq_upload(_SB(blob, field_rows=[row]), "oct.csv", b"x")
+        self.assertEqual(plan["upgraded_ids"], ["b0467956-live"])
+        pin = [f for f in plan["blobs"][1]["payload"]["features"] if is_field_feature(f)][0]
+        self.assertEqual(pin["properties"]["status"], "Not Interested")
 
     def test_commit_is_one_rpc_then_the_field_status_sweep(self):
         sb = _SB(self.blob)

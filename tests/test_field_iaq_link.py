@@ -107,3 +107,22 @@ def test_link_to_a_response_that_no_longer_exists_is_cleared():
     p = pin['properties']
     assert 'has_iaq_survey' not in p and 'iaq_response_id' not in p
     assert p['status'] == 'Completed'          # surveyor's status is kept
+
+
+def test_linking_keeps_the_surveyors_status():
+    # The binding rule: an upload or refresh never alters a real field
+    # point's observation. The link is carried by has_iaq_survey / iaq_*.
+    pin = _pin(status='Not Interested', color='#123456')
+    assert _apply_iaq_to_field_features([pin], [_iaq('R_1', _north(5))]) == 1
+    p = pin['properties']
+    assert p['has_iaq_survey'] is True and p['iaq_response_id'] == 'R_1'
+    assert p['status'] == 'Not Interested'
+    assert p['color'] == '#123456'
+
+
+def test_linking_a_pin_with_no_status_marks_it_completed():
+    for status in ('', None, 'Unknown'):
+        pin = _pin(status=status)
+        assert _apply_iaq_to_field_features([pin], [_iaq('R_1', _north(5))]) == 1
+        assert pin['properties']['status'] == 'Completed', status
+        assert pin['properties']['has_iaq_survey'] is True

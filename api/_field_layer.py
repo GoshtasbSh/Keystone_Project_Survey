@@ -190,8 +190,12 @@ def rebuild_field_layer(blob_features: list, field_rows: list,
                 for k in IAQ_LINK_KEYS:
                     if k in old_p:
                         feat["properties"][k] = old_p[k]
-                feat["properties"]["status"] = "Completed"
-                feat["properties"]["color"] = STATUS_COLORS["Completed"]
+                # Same rule as _processing._apply_iaq_to_field_features: the
+                # surveyor's status is kept; only a pin without one reads
+                # as Completed.
+                if feat["properties"].get("status") in (None, "", "Unknown"):
+                    feat["properties"]["status"] = "Completed"
+                    feat["properties"]["color"] = STATUS_COLORS["Completed"]
         fresh.append(feat)
 
     table_ids = {str(r.get("id")) for r in field_rows or [] if r.get("id") is not None}

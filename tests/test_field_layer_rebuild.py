@@ -100,6 +100,17 @@ class RebuildFieldLayerTests(unittest.TestCase):
                                        carry_iaq_link_from=[old])
         p = [f for f in feats if is_field_feature(f)][0]["properties"]
         self.assertEqual(p["iaq_response_id"], "R_6XiLZgAcnHtf16F")
+        # The surveyor's status from the table row is kept; the link is
+        # carried by has_iaq_survey / iaq_* only.
+        self.assertEqual(p["status"], "Left Info")
+        self.assertTrue(p["has_iaq_survey"])
+
+    def test_carry_iaq_link_marks_a_pin_without_status_completed(self):
+        old = field_copy(REAL["id"], REAL["lon"], REAL["lat"], "Carey Morford",
+                         has_iaq_survey=True, iaq_response_id="R_6XiLZgAcnHtf16F")
+        feats, _ = rebuild_field_layer([self.c1], [dict(REAL, status="")],
+                                       carry_iaq_link_from=[old])
+        p = [f for f in feats if is_field_feature(f)][0]["properties"]
         self.assertEqual(p["status"], "Completed")
 
     def test_unchanged_input_has_identical_signature(self):

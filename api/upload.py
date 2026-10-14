@@ -429,10 +429,12 @@ def prepare_iaq_upload(sb, filename: str, csv_bytes: bytes, *, force: bool = Fal
         n_field_upgraded = _apply_iaq_to_field_features(
             field_feats, iaq_feats, parcel_idx=parcel_idx)
     _finalize_iaq_match_state(geojson, analysis, contact_only_feats)
+    # Every linked pin's row gets iaq_matched (GAP-3: that is the only
+    # column written). The pin's status is the surveyor's and no longer
+    # changes on link, so it is not part of the filter.
     upgraded_ids = [
         ff['properties']['field_point_id'] for ff in field_feats
         if ff['properties'].get('has_iaq_survey')
-        and ff['properties'].get('status') == 'Completed'
     ]
 
     # Tag + parcel-dedup CONTACTS only (never field pins — a pin must not
