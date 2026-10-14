@@ -36,9 +36,9 @@ def test_october_stay_bars():
     if not OCTOBER.exists():
         pytest.skip('October export not present')
     _g, a, *_ = process_iaq_bytes(OCTOBER.read_bytes(), [], load_parcel_index())
-    # GAP-10 RE-BASELINE: analysis-level (drawn features only). After MATCH-3
-    # (latest response per household) this becomes {'Indefinitely': 59,
-    # '1-5 years': 26, 'less than 1 year': 8, '6-10 years': 5, "Don't know": 9}.
+    # GAP-10 RE-BASELINE: analysis-level (drawn features only), one latest
+    # response per household (MATCH-3): 106 households. Before the dedup
+    # (114 placed responses) it read 64 / 27 / 8 / 6 / 10.
     assert a['residency']['anticipated_stay'] == {
-        'Indefinitely': 64, '1-5 years': 27, 'less than 1 year': 8,
-        '6-10 years': 6, "Don't know": 10}
+        'Indefinitely': 59, '1-5 years': 26, 'less than 1 year': 8,
+        '6-10 years': 5, "Don't know": 9}

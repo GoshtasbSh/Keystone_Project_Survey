@@ -96,10 +96,11 @@ def test_october_no_evidence_respondent(october):
 
 
 def test_october_mold_pct(october):
-    # GAP-10 RE-BASELINE: 32 / 114 placed responses today; becomes 28.3 once
-    # the household dedup (MATCH-3) lands.
+    # GAP-10 RE-BASELINE: over the 106 households (latest response each,
+    # MATCH-3). It read 28.1 (32 / 114 placed responses) before the dedup,
+    # and 28.9 before the mold fix.
     _, analysis = october
-    assert analysis['health']['mold_pct'] == 28.1          # 32 / 114, was 28.9
+    assert analysis['health']['mold_pct'] == 28.3
 
 
 def test_october_hospital_blank_and_detail(october):
