@@ -383,6 +383,17 @@ function iaqUploadNotices(data) {
   return { lines, durationMs: warn ? 12000 : 5000 };
 }
 
+// Clickable point layers whose own handler owns a click: onParcelClick opens
+// no parcel popup when any of these has a feature at the clicked pixel.
+// Every layer registered with map.on('click', ...) other than parcels-fill
+// belongs here (tests/js/ui10_parcel_popup_guard.test.mjs scans for it).
+const PARCEL_POPUP_SUPPRESSING_LAYERS = Object.freeze([
+  'survey-points', 'survey-iaq-risk',
+  'iaq-points', 'iaq-points-g1', 'iaq-highlighted',
+  'field-points-dots',
+  'cluster-circles',
+]);
+
 // ==== PURE-HELPERS END ====
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -2237,18 +2248,16 @@ async function onPointClick(e) {
 }
 
 function onParcelClick(e) {
-  // Don't open a second parcel popup when ANY contact / IAQ marker
-  // was clicked at the same pixel. Both the contact (onPointClick)
-  // and IAQ (onIAQPointClick) handlers attach the parcel as their
-  // own "Parcel Data (FL DOR)" tab, so a separate parcels-fill popup
-  // would just duplicate that info. Includes the IAQ symbol layers
-  // (iaq-points = G3 house-with-wifi, iaq-points-g1 = G1 plain house,
-  // iaq-highlighted = street-highlight halo) so a click on a Qualtric-
-  // only marker no longer triggers a second popup.
-  const pointLayers = [
-    'survey-points', 'survey-iaq-risk',
-    'iaq-points', 'iaq-points-g1', 'iaq-highlighted',
-  ].filter(l => map.getLayer(l));
+  // Don't open a second parcel popup when ANY contact / IAQ / field /
+  // cluster marker was clicked at the same pixel. The contact
+  // (onPointClick) and IAQ (onIAQPointClick) handlers attach the parcel
+  // as their own "Parcel Data (FL DOR)" tab, and the field pin and
+  // cluster handlers open their own popup, so a separate parcels-fill
+  // popup would just duplicate or cover it. See
+  // PARCEL_POPUP_SUPPRESSING_LAYERS (iaq-points = G3 house-with-wifi,
+  // iaq-points-g1 = G1 plain house, iaq-highlighted = street halo,
+  // field-points-dots = field pins).
+  const pointLayers = PARCEL_POPUP_SUPPRESSING_LAYERS.filter(l => map.getLayer(l));
   const pointFeats = pointLayers.length
     ? map.queryRenderedFeatures(e.point, { layers: pointLayers })
     : [];
