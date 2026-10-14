@@ -4151,7 +4151,7 @@ function showSummaryPopup(uploadResult, iaqAnaData) {
         <div style="flex:1;min-width:100px;background:rgba(255,255,255,.04);border-radius:8px;padding:10px 14px;text-align:center">
           <div style="font-size:26px;font-weight:700;font-family:var(--mono)">${uploadResult.streets_analyzed || 0}</div>
           <div style="font-size:11px;color:var(--text2);margin-top:2px">Streets Analyzed</div>
-          <div style="font-size:10px;color:var(--muted);margin-top:2px">≥3 responses each</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">≥3 ${_rc.unit} each</div>
         </div>
       </div>
 
@@ -4407,10 +4407,13 @@ async function uploadFile(zone, endpoint, file) {
       }
 
       zone.classList.add('success');
+      // data.points counts drawn features: households once repeat answers are
+      // superseded (UI-4 names), so say which unit it is.
+      const _upRc = responseCountsSummary(iaqAnalysis?.analysis, iaqAnalysis?.validation || data.validation);
       // Coerce every interpolated value to a number so the success toast
       // can never echo attacker-shaped HTML out of the upload response.
       zone.innerHTML = `<h4>IAQ Data Loaded!</h4>
-        <p>${Number(data.points) || 0} responses mapped · ${Number(data.streets_analyzed) || 0} streets</p>
+        <p>${Number(data.points) || 0} ${_upRc.unit} mapped${_upRc.excluded ? ` (${Number(_upRc.responses) || 0} responses)` : ''} · ${Number(data.streets_analyzed) || 0} streets</p>
         <p style="font-size:11px;color:var(--muted)">Mean risk score: ${Number(data.mean_risk) || 0}/100</p>`;
 
       // Show summary popup

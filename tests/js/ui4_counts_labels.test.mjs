@@ -35,3 +35,12 @@ test('upload summary says households, not responses, once repeats are excluded',
   assert.ok(!src.includes('>Responses Placed on Map<'));
   assert.ok(src.includes("${_rc.unit === 'households' ? 'Households' : 'Responses'} Placed on Map"));
 });
+
+test('upload success zone and Streets Analyzed sub-label use the household unit', () => {
+  const src = readSource('static/js/dashboard.js');
+  // data.points is len(drawn features) = households after the supersede pass.
+  assert.ok(!src.includes('${Number(data.points) || 0} responses mapped'));
+  assert.ok(src.includes('${Number(data.points) || 0} ${_upRc.unit} mapped'));
+  assert.ok(!src.includes('≥3 responses each'));
+  assert.ok(src.includes('≥3 ${_rc.unit} each'));
+});
