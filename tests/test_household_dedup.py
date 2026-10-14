@@ -116,3 +116,26 @@ def test_october_counts_report_responses_and_households(october):
     assert v['dropped_no_geocode'] == done - 114       # NOT done - 106
     assert v['charted_pct_of_completed'] == round(114 / done * 100, 1)
     assert sum(d['n'] for d in streets.values()) == 106
+
+
+def test_excel_resaved_dates_are_compared_as_dates_not_strings():
+    # After Excel re-saves the CSV, RecordedDate reads 'M/D/YYYY H:MM'. As
+    # strings '10/1/2026' sorts before '9/30/2026'; the later answer must win.
+    feats = [_f('R_oct', '6386', '10/1/2026 9:05'),
+             _f('R_sep', '6386', '9/30/2026 17:40')]
+    kept, superseded = _supersede_repeat_households(feats)
+    assert [f['properties']['response_id'] for f in kept] == ['R_oct']
+    assert [f['properties']['response_id'] for f in superseded] == ['R_sep']
+
+
+def test_iso_with_seconds_and_unparseable_dates():
+    feats = [_f('R_b', '7', '2026-01-17 09:00:27'),
+             _f('R_a', '7', '2026-01-17 09:00:26')]
+    kept, _ = _supersede_repeat_households(feats)
+    assert kept[0]['properties']['response_id'] == 'R_b'
+    # A blank or unreadable date never beats a real one; among themselves
+    # the later CSV row wins (same rule as before).
+    feats = [_f('R_dated', '8', '1/2/2026 10:00'), _f('R_junk', '8', 'n/a'), _f('R_blank', '8', '')]
+    kept, superseded = _supersede_repeat_households(feats)
+    assert kept[0]['properties']['response_id'] == 'R_dated'
+    assert [f['properties']['response_id'] for f in superseded] == ['R_junk', 'R_blank']

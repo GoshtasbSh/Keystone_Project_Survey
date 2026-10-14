@@ -19,7 +19,7 @@ import functools
 import urllib.request
 import urllib.parse
 from collections import Counter, defaultdict
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from math import radians, sin, cos, sqrt, atan2, isfinite
 from numbers import Integral, Real
@@ -1395,6 +1395,29 @@ def _household_key(feature: dict):
     return (round(float(lon), 6), round(float(lat), 6), h)
 
 
+_RECORDED_DATE_FORMATS = (
+    '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d',
+    # Excel re-save of the export (US locale): 'M/D/YYYY H:MM'.
+    '%m/%d/%Y %H:%M', '%m/%d/%Y %H:%M:%S', '%m/%d/%Y %I:%M %p',
+    '%m/%d/%Y %I:%M:%S %p', '%m/%d/%Y',
+)
+
+
+def _recorded_datetime(value):
+    """RecordedDate as a datetime, or None when blank or unreadable.
+    Accepts Qualtrics' ISO form and the 'M/D/YYYY H:MM' form a CSV gets
+    after Excel re-saves it, where string order is not time order."""
+    text = ' '.join(str(value or '').split())
+    if not text:
+        return None
+    for fmt in _RECORDED_DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def _supersede_repeat_households(features: list) -> tuple:
     """Keep ONLY the latest response (by RecordedDate) per household.
 
@@ -1405,10 +1428,12 @@ def _supersede_repeat_households(features: list) -> tuple:
     The kept response records ``household_responses`` (how many times the
     household answered) and ``superseded_response_ids``.
 
-    RecordedDate is Qualtrics' 'YYYY-MM-DD HH:MM:SS', so string order is
-    time order. Ties (and blank dates) fall back to CSV row order: the
-    later row wins. One pass to group, sorting only within the (tiny)
-    groups. Returns (kept, superseded); kept keeps the CSV order of the
+    RecordedDate is parsed as a date (Qualtrics' 'YYYY-MM-DD HH:MM:SS',
+    or 'M/D/YYYY H:MM' after an Excel re-save, where string order is not
+    time order). A blank or unreadable date sorts before every real one.
+    Ties fall back to CSV row order: the later row wins. One pass to
+    group; dates are parsed and sorted only within the (tiny) groups.
+    Returns (kept, superseded); kept keeps the CSV order of the
     surviving rows.
     """
     groups: dict = {}
@@ -1420,8 +1445,10 @@ def _supersede_repeat_households(features: list) -> tuple:
     for idxs in groups.values():
         if len(idxs) < 2:
             continue
-        ordered = sorted(idxs, key=lambda i: (
-            str(features[i]['properties'].get('recorded_date') or ''), i))
+        def _order(i):
+            dt = _recorded_datetime(features[i]['properties'].get('recorded_date'))
+            return (dt is not None, dt or datetime.min, i)
+        ordered = sorted(idxs, key=_order)
         keep_i = ordered[-1]
         kp = features[keep_i]['properties']
         kept_id = kp.get('response_id', '')
