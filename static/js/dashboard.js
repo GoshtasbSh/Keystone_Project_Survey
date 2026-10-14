@@ -128,7 +128,7 @@ const COORD_SOURCE_TIERS = [
   ['geocoded',        'Census geocode only (no parcel)',      'Census',        '#f59e0b'],
 ];
 function coordSourceBreakdown(matchDetails) {
-  const rows = (Array.isArray(matchDetails) ? matchDetails : []).filter(d => d && !d.dup_excluded);
+  const rows = (Array.isArray(matchDetails) ? matchDetails : []).filter(d => d && !d.superseded);
   const counts = new Map();
   for (const d of rows) counts.set(d.coord_source, (counts.get(d.coord_source) || 0) + 1);
   const out = [];
@@ -162,16 +162,14 @@ function sharedCodeLabelState(analysis) {
   return { verified, unverified: new Set(verified ? [] : fields) };
 }
 
-// Households vs responses. After the latest-response-per-household rule the
-// analysis counts households; n_mapped_responses keeps the raw number so the
-// UI can say how many earlier repeat answers were left out. A blob written
-// before that rule has no n_households and is labelled "responses".
+// Households vs responses (MATCH-3 names). A blob written before the
+// latest-response-per-household rule has none of them and reads "responses".
 function responseCountsSummary(analysis, validation) {
-  const a = analysis || {}, v = validation || {};
-  const households = Number(a.n_households ?? a.n_responses) || 0;
-  const excluded = Number(a.n_duplicates_excluded ?? v.duplicates_excluded) || 0;
-  const responses = Number(a.n_mapped_responses ?? (households + excluded)) || 0;
-  const unit = a.n_households != null ? 'households' : 'responses';
+  const a = analysis || {}, v = validation || a.validation || {};
+  const households = Number(a.n_households ?? v.households_mapped ?? a.n_responses) || 0;
+  const excluded = Number(v.repeat_responses_excluded) || 0;
+  const responses = Number(a.n_responses_mapped ?? v.responses_mapped ?? (households + excluded)) || 0;
+  const unit = (a.n_households != null || v.households_mapped != null) ? 'households' : 'responses';
   return { households, responses, excluded, unit };
 }
 
@@ -276,18 +274,19 @@ function countMatchGroups(contactFeatures, iaqFeatures) {
   }
   for (const f of (iaqFeatures || [])) {
     const p = (f && f.properties) || {};
-    if (p.dup_excluded === true || p.dup_excluded === 'true') continue;
+    if (p.superseded === true || p.superseded === 'true' || p.superseded_by) continue;
     if (p.match_status === 'iaq_only') counts.iaq_only++;
   }
   return counts;
 }
 
-// Latest-response-per-household: the server flags the earlier answer(s)
-// with dup_excluded=true + dup_kept_response_id. They are kept in the data
-// but never drawn or counted. `redirect` maps an excluded response id to
-// the kept one so an old link (contact / field pin) still opens the
-// household's current answers; `earlierByKept` feeds the popup note.
-function splitExcludedDuplicates(features) {
+// Latest-response-per-household (api/_processing._supersede_repeat_households):
+// the server moves the earlier answer(s) to geojson.superseded_features
+// (superseded=true, superseded_by=<kept id>) and the kept row lists them in
+// superseded_response_ids. `redirect` sends an old link to the kept answer;
+// `earlierByKept` feeds the popup note. Superseded rows are read first so
+// their recorded_date wins over the id-only entry from the kept row.
+function splitExcludedDuplicates(features, supersededFeatures = []) {
   const drawn = [], excluded = [];
   const redirect = new Map(), earlierByKept = new Map();
   const note = (kept, entry) => {
@@ -296,26 +295,26 @@ function splitExcludedDuplicates(features) {
     const list = earlierByKept.get(kept);
     if (!list.some(e => e.response_id === entry.response_id)) list.push(entry);
   };
-  for (const f of (features || [])) {
+  const isSup = (p) => p.superseded === true || p.superseded === 'true' || !!p.superseded_by;
+  const take = (f, fromSupersededList) => {
     const p = (f && f.properties) || {};
-    if (p.dup_excluded === true || p.dup_excluded === 'true') {
+    const rid = String(p.response_id || '').trim();
+    if (fromSupersededList || isSup(p)) {
       excluded.push(f);
-      const rid = String(p.response_id || '').trim();
-      const kept = String(p.dup_kept_response_id || '').trim();
+      const kept = String(p.superseded_by || '').trim();
       if (rid && kept) redirect.set(rid, kept);
       note(kept, { response_id: rid, recorded_date: String(p.recorded_date || '') });
-    } else {
-      drawn.push(f);
-      const rid = String(p.response_id || '').trim();
-      if (Array.isArray(p.dup_earlier_response_ids)) {
-        for (const e of p.dup_earlier_response_ids) {
-          const erid = String(e || '').trim();
-          if (erid && rid) redirect.set(erid, rid);
-          note(rid, { response_id: erid, recorded_date: '' });
-        }
-      }
+      return;
     }
-  }
+    drawn.push(f);
+    for (const e of (Array.isArray(p.superseded_response_ids) ? p.superseded_response_ids : [])) {
+      const erid = String(e || '').trim();
+      if (erid && rid) redirect.set(erid, rid);
+      note(rid, { response_id: erid, recorded_date: '' });
+    }
+  };
+  for (const f of (supersededFeatures || [])) take(f, true);
+  for (const f of (features || [])) take(f, false);
   return { drawn, excluded, redirect, earlierByKept };
 }
 
@@ -364,11 +363,11 @@ function iaqUnmatched(data) {
 function applyIaqDuplicateRule(fc) {
   const feats = fc?.features;
   if (!Array.isArray(feats)) return fc;
-  const s = splitExcludedDuplicates(feats);
+  const s = splitExcludedDuplicates(feats, fc.superseded_features || []);
   iaqExcludedFeatures = s.excluded;
   _iaqDupRedirect = s.redirect;
   _iaqDupEarlierByKept = s.earlierByKept;
-  return s.excluded.length ? { ...fc, features: s.drawn } : fc;
+  return s.drawn.length !== feats.length ? { ...fc, features: s.drawn } : fc;
 }
 
 // Must match FALLBACK_ADDRESS in api/iaq-points.py — the parcel address
@@ -1848,7 +1847,7 @@ const _IAQ_NON_ANSWER_FIELDS = new Set([
   'matched_address', 'coord_source', 'second_attempt',
   'status_detail', 'parcel_id', 'parcel_lon', 'parcel_lat',
   'source', 'field_point_id', 'coincident_contacts',
-  'dup_excluded', 'dup_kept_response_id', 'dup_earlier_response_ids', 'household_key',
+  'superseded', 'superseded_by', 'superseded_response_ids', 'household_responses',
 ]);
 
 // Survey-question category structure — mirrors the analysis charts'
@@ -4033,7 +4032,7 @@ function showSummaryPopup(uploadResult, iaqAnaData) {
     gpsOffset:   unmatchedDetails.filter(d => d.nearest_contact_m != null && d.nearest_contact_m < 300).length,
     notInList:   unmatchedDetails.filter(d => d.nearest_contact_m != null && d.nearest_contact_m >= 300 && d.nearest_contact_m < 1000).length,
     noContact:   unmatchedDetails.filter(d => d.nearest_contact_m == null || d.nearest_contact_m >= 1000).length,
-    geocoded:    unmatchedDetails.filter(d => d.coord_source === 'geocoded').length,
+    geocoded:    unmatchedDetails.filter(d => d.coord_source === 'geocoded' || d.coord_source === 'parcel_snapped').length,
   };
   const unmatchedByStreet = {};
   unmatchedDetails.forEach(d => {
@@ -4060,7 +4059,8 @@ function showSummaryPopup(uploadResult, iaqAnaData) {
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
         <div style="flex:1;min-width:100px;background:rgba(255,255,255,.04);border-radius:8px;padding:10px 14px;text-align:center">
           <div style="font-size:26px;font-weight:700;font-family:var(--mono)">${_totalMap}</div>
-          <div style="font-size:11px;color:var(--text2);margin-top:2px">Responses Placed on Map</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:2px">${_rc.unit === 'households' ? 'Households' : 'Responses'} Placed on Map</div>
+          ${_rc.excluded ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">${_rc.responses} responses · ${_rc.excluded} earlier repeat${_rc.excluded === 1 ? '' : 's'} excluded</div>` : ''}
         </div>
         <div style="flex:2;min-width:200px;background:rgba(255,255,255,.04);border-radius:8px;padding:10px 14px">
           <div style="font-size:10px;font-weight:700;color:var(--muted);margin-bottom:7px;text-transform:uppercase;letter-spacing:.06em">How responses were placed (typed address)</div>
@@ -4114,7 +4114,7 @@ function showSummaryPopup(uploadResult, iaqAnaData) {
         ${unmatchedByReason.noContact ? `<span style="padding:3px 10px;border-radius:10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:var(--red);font-size:10px;font-weight:600">
           Flyer / QR respondent: ${unmatchedByReason.noContact} — outside contact database</span>` : ''}
         ${unmatchedByReason.geocoded ? `<span style="padding:3px 10px;border-radius:10px;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.3);color:#818cf8;font-size:10px;font-weight:600">
-          Address-geocoded: ${unmatchedByReason.geocoded} — lower positional accuracy</span>` : ''}
+          Census-placed: ${unmatchedByReason.geocoded} — lower positional accuracy</span>` : ''}
       </div>
       <!-- Per-street table -->
       ${unmatchedStreetRows.length ? `
@@ -4958,6 +4958,14 @@ function buildSurveyResultsTab(data) {
           Every percentage on these tabs is out of ${rc.households} ${rc.unit}, not ${v.completed_in_csv} &mdash; these addresses could not be placed on the map.</div>
         ${(v.dropped_addresses||[]).length ? `<div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:6px;line-height:1.6">
           ${v.dropped_addresses.map(a=>escapeHtml(a)).join(' &middot; ')}</div>` : ''}
+      </div>` : ''}
+      ${(v.superseded_responses||[]).length ? `
+      <div class="stat-card" style="margin-bottom:8px;border-left:3px solid var(--cyan)">
+        <div class="label">Repeat responses excluded</div>
+        <div class="value" style="font-size:18px">${v.superseded_responses.length}</div>
+        <div class="sub">These households answered more than once; only the latest response is mapped and counted.</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:6px;line-height:1.6">
+          ${v.superseded_responses.map(s=>`${escapeHtml(s.response_id)} &rarr; ${escapeHtml(s.superseded_by)}`).join(' &middot; ')}</div>
       </div>` : ''}
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <div class="chart-box" style="flex:1;min-width:110px">${head('How responses were placed', 'coord_source')}<canvas id="rc-coord-src" height="110"></canvas></div>

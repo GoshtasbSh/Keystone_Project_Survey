@@ -39,7 +39,7 @@ test('match legend ignores field copies and excluded duplicates', () => {
   const c = H.countMatchGroups(
     [pt(0, 0, { match_status: 'matched' }), pt(0, 0, { match_status: 'contact_only' }),
      pt(0, 0, { source: 'field', field_point_id: 'x', match_status: 'contact_only' })],
-    [pt(0, 0, { match_status: 'iaq_only' }), pt(0, 0, { match_status: 'iaq_only', dup_excluded: true }),
+    [pt(0, 0, { match_status: 'iaq_only' }), pt(0, 0, { match_status: 'iaq_only', superseded: true, superseded_by: 'R_k' }),
      pt(0, 0, { match_status: 'matched' })]);
   assert.deepEqual(c, { matched: 1, contact_only: 1, iaq_only: 1 });
 });

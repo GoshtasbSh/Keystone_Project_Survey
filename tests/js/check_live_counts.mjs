@@ -17,12 +17,13 @@ let H;
 try { H = loadPure([...names, 'splitExcludedDuplicates']); } catch { H = loadPure(names); }
 const sp = loadJson(spPath).features;
 const fp = loadJson(fpPath).features;
-const iaq = loadJson(iaqPath).features;
+const iaqFc = loadJson(iaqPath);
+const iaq = iaqFc.features;
 
 const liveIds = new Set(fp.map(f => String(f.properties.id)));
 const { kept, stale } = H.partitionFieldCopies(sp, [], liveIds);
 const { drawn, excluded } = H.splitExcludedDuplicates
-  ? H.splitExcludedDuplicates(iaq) : { drawn: iaq, excluded: [] };
+  ? H.splitExcludedDuplicates(iaq, iaqFc.superseded_features || []) : { drawn: iaq, excluded: [] };
 const status = H.countUnifiedStatuses(kept, fp, true);
 const groups = H.countMatchGroups(kept, drawn);
 const total = Object.values(status).reduce((s, n) => s + n, 0);

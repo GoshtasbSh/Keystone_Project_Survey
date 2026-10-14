@@ -22,7 +22,7 @@ test('breakdown adds up to the total (Oct 13 mix: 89 / 23 / 2)', () => {
 test('unknown/legacy sources go to Other; excluded duplicates are not counted', () => {
   const bd = H.coordSourceBreakdown([
     { coord_source: 'gps' }, { coord_source: undefined }, { coord_source: 'geocoded' },
-    { coord_source: 'parcel_exact', dup_excluded: true },
+    { coord_source: 'parcel_exact', superseded: true, superseded_by: 'R_k' },
   ]);
   assert.equal(bd.total, 3);
   assert.deepEqual(bd.rows.map(r => [r.key, r.count]), [['geocoded', 1], ['other', 2]]);
