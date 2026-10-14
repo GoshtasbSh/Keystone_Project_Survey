@@ -135,6 +135,22 @@ function coordSourceShort(bd) {
   return bd.rows.length ? bd.rows.map(r => `${r.count} ${r.short}`).join(' · ') : 'no placement data';
 }
 
+// Shared-code labels (QID141 condition, QID17 urgency, QID100 skirting):
+// the server sends analysis.shared_code_labels = {verified, resolution,
+// fields} from api/survey_logic.shared_code_status(). The PI resolved every
+// question on 2026-10-13, so the server ships verified=true and no field
+// carries a note. If a reading is ever reopened (SHARED_CODE_VERIFIED=False)
+// the listed fields get a "label unverified" note again. An older analysis
+// blob without the key was processed before the decision, so it is treated
+// as unverified until it is re-processed.
+const SHARED_CODE_DEFAULT_FIELDS = ['condition', 'afford_urgency', 'mh_skirting'];
+function sharedCodeLabelState(analysis) {
+  const s = analysis && analysis.shared_code_labels;
+  const verified = !!(s && s.verified === true);
+  const fields = (s && Array.isArray(s.fields) && s.fields.length) ? s.fields : SHARED_CODE_DEFAULT_FIELDS;
+  return { verified, unverified: new Set(verified ? [] : fields) };
+}
+
 // ==== PURE-HELPERS END ====
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -1697,22 +1713,31 @@ const _RAW_IAQ_LABELS = {
   cooking_method:      'What stove type do you have in your home? \r\nPlease select all options that apply. - Selected Choice',
 };
 
+// Shown next to a shared-code field until the Qualtrics check is done.
+function _sharedCodeNoteHtml(pair) {
+  return `<div class="chart-source" style="color:var(--orange);font-style:normal">Label unverified: Qualtrics exports ${escapeHtml(pair)} with the same code. Pending a check in Qualtrics.</div>`;
+}
+
 function buildSurveyAnswersTab(iaqProps) {
   const qtext = { ..._RAW_IAQ_LABELS, ...(iaqAnalysis?.survey_questions || {}) };
   const friendly = (k) => k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   const props = iaqProps || {};
+  const sc = sharedCodeLabelState(iaqAnalysis?.analysis);
 
   // The label is shown in full and never truncated: it is the survey's own
   // question wording, so a reader must be able to select it and find that
   // exact string in the Qualtrics export. Slicing it to 90 chars made every
   // long question unsearchable. It wraps instead.
-  const renderRow = (qLabel, cell) => {
+  const renderRow = (qLabel, cell, unverified) => {
     const valStyle = cell.muted
       ? 'max-width:42%;text-align:right;font-size:11px;color:var(--muted);font-weight:400;font-style:italic;line-height:1.35'
       : 'max-width:42%;text-align:right;font-size:11px;color:var(--text);font-weight:500;line-height:1.35';
+    const flag = unverified
+      ? '<div style="font-size:9.5px;color:var(--orange);font-weight:400;font-style:normal" title="Two Qualtrics choices share this exported code; pending a check in Qualtrics.">label unverified</div>'
+      : '';
     return `<div class="popup-row" style="align-items:flex-start;gap:8px;padding:3px 0">
       <span class="popup-label" style="max-width:58%;font-size:10.5px;line-height:1.35;color:var(--text2);font-weight:400;overflow-wrap:anywhere" title="${escapeHtml(qLabel)}">${escapeHtml(qLabel)}</span>
-      <span class="popup-value" style="${valStyle}">${escapeHtml(cell.text)}</span>
+      <span class="popup-value" style="${valStyle}">${escapeHtml(cell.text)}${flag}</span>
     </div>`;
   };
 
@@ -1725,7 +1750,7 @@ function buildSurveyAnswersTab(iaqProps) {
       return n + (!c.muted && c.text !== '—' ? 1 : 0);
     }, 0);
     const rows = keys
-      .map(k => renderRow(qtext[k] || friendly(k), formatIaqAnswerCell(k, props[k])))
+      .map(k => renderRow(qtext[k] || friendly(k), formatIaqAnswerCell(k, props[k]), sc.unverified.has(k)))
       .join('');
     return `<div style="margin-top:12px;padding-top:8px;border-top:1px solid rgba(34,211,238,.15)">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
@@ -4583,6 +4608,7 @@ function buildSurveyResultsTab(data) {
   const demoExt        = a.demographics_ext || {};
   const surveyQs       = a.survey_questions || {};
   const chartSources   = a.chart_sources    || {};
+  const sc             = sharedCodeLabelState(a);
   // Helper: build "<h4>Title</h4><div class='chart-source'>...</div>"
   // Renders silently (no caption) when the source key is absent.
   const head = (title, srcKey) => {
@@ -4689,7 +4715,7 @@ function buildSurveyResultsTab(data) {
     <div id="res-pane-structural" class="res-pane" style="display:none">
       <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
         <div class="chart-box" style="flex:1;min-width:120px">${head('Housing Types', 'housing_types')}<canvas id="rc-htypes" height="110"></canvas></div>
-        <div class="chart-box" style="flex:1;min-width:120px">${head('Home Condition', 'conditions')}<canvas id="rc-cond" height="110"></canvas></div>
+        <div class="chart-box" style="flex:1;min-width:120px">${head('Home Condition', 'conditions')}${sc.unverified.has('condition') ? _sharedCodeNoteHtml('Excellent and Critical') : ''}<canvas id="rc-cond" height="110"></canvas></div>
         <div class="chart-box" style="flex:1.6;min-width:160px">${head('Structural Score by Street (top 8)', 'struct_by_street')}<canvas id="rc-struct-street" height="110"></canvas></div>
       </div>
       <div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(100px,1fr))">
@@ -4778,13 +4804,14 @@ function buildSurveyResultsTab(data) {
         <div class="chart-box" style="flex:1;min-width:200px">${head('Housing safety — social threats', 'safety_social')}<canvas id="rc-residency-social" height="120"></canvas><div class="chart-source">Source: ${escapeHtml(surveyQs.safety_social || '')}</div></div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-        <div class="chart-box" style="flex:1;min-width:200px">${head('Affordable-housing urgency', 'afford_urgency')}<canvas id="rc-residency-urgency" height="120"></canvas><div class="chart-source">Source: ${escapeHtml(surveyQs.afford_urgency || '')}</div></div>
+        <div class="chart-box" style="flex:1;min-width:200px">${head('Affordable-housing urgency', 'afford_urgency')}${sc.unverified.has('afford_urgency') ? _sharedCodeNoteHtml('pairs of urgency levels') : ''}<canvas id="rc-residency-urgency" height="120"></canvas><div class="chart-source">Source: ${escapeHtml(surveyQs.afford_urgency || '')}</div></div>
         <div class="chart-box" style="flex:1.2;min-width:240px">${head('Most effective affordability strategy', 'afford_strategy')}<canvas id="rc-residency-strategy" height="120"></canvas><div class="chart-source">Source: ${escapeHtml(surveyQs.afford_strategy || '')}</div></div>
       </div>
       <div class="chart-box">${head('Importance of relocation factors (count of "important / very important")', 'reloc_factors')}<div id="rc-reloc-bars" class="matrix-bars"></div><div class="chart-source">Source: ${escapeHtml((surveyQs.reloc_factor_qol || '').replace(/^Relocation factor — /, '') ? 'If you lived in another place before, how important were the following factors in relocating to HRE?' : '')}</div></div>
       <div style="margin-top:8px;padding:10px;background:var(--card);border:1px solid var(--border);border-radius:var(--r)">
         <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:6px">Mobile-home skirting intact?</div>
         <div class="chart-source" style="font-style:italic;color:var(--muted);font-size:10px;margin-bottom:6px">Source: ${escapeHtml(surveyQs.mh_skirting || '')}</div>
+        ${sc.unverified.has('mh_skirting') ? _sharedCodeNoteHtml('Yes/Somewhat and No/Not Applicable') : ''}
         <div id="rc-mh-skirting" style="font-size:11px;color:var(--text)"></div>
       </div>
     </div>
