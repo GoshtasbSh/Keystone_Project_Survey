@@ -179,6 +179,17 @@ function isFieldCopy(p) {
   return !!p && (p.source === 'field' || (p.field_point_id != null && p.field_point_id !== ''));
 }
 
+// The blob copy of a field pin carries the survey link (iaq_response_id).
+function findFieldLinkedCopy(features, fieldPointId) {
+  const id = String(fieldPointId ?? '');
+  if (!id) return null;
+  for (const f of (features || [])) {
+    const p = (f && f.properties) || {};
+    if (isFieldCopy(p) && String(p.field_point_id) === id && p.has_iaq_survey) return f;
+  }
+  return null;
+}
+
 // Split contact features into what may be drawn and field copies whose pin
 // no longer exists in field_survey_points (deleted test/QA pins linger in
 // the blob). `parked` are copies hidden earlier; one whose pin has since
@@ -1001,11 +1012,11 @@ function removeFieldPoint(id) {
   setFieldPointsData();
 }
 
-function onFieldPointClick(e) {
+async function onFieldPointClick(e) {
   e.preventDefault();
   const f = e.features[0];
   const p = f.properties;
-  const coords = f.geometry.coordinates;
+  const coords = f.geometry.coordinates.slice();
   const mine = p.is_mine === true || p.is_mine === 'true';
   const badge = mine
     ? '<span style="margin-left:auto;font-size:9px;font-weight:700;padding:2px 6px;border-radius:6px;background:rgba(16,185,129,.18);color:#10b981;border:1px solid rgba(16,185,129,.4);text-transform:uppercase;letter-spacing:.4px;">You</span>'
@@ -1016,10 +1027,7 @@ function onFieldPointClick(e) {
   // name supplied by guests, free-text notes, and statuses written by
   // any team member) so each interpolation MUST go through escapeHtml.
   const colorSafe = /^#[0-9a-fA-F]{3,8}$/.test(String(p.color || '')) ? p.color : '#9ca3af';
-  new maplibregl.Popup({ offset: 14, maxWidth: '260px' })
-    .setLngLat(coords)
-    .setHTML(`
-      <div style="padding:10px 12px;font-family:var(--font);">
+  const visitHtml = `
         <div style="display:flex;align-items:center;gap:7px;margin-bottom:6px;">
           <div style="width:10px;height:10px;border-radius:50%;background:${colorSafe};box-shadow:0 0 6px ${colorSafe}66;"></div>
           <div style="font-size:13px;font-weight:700;color:${colorSafe};">${escapeHtml(p.status)}</div>
@@ -1027,10 +1035,38 @@ function onFieldPointClick(e) {
         </div>
         <div style="font-size:11px;color:var(--muted);">👤 ${escapeHtml(p.collector)}</div>
         <div style="font-size:11px;color:var(--muted);">🕐 ${escapeHtml(when)}</div>
-        ${p.notes ? `<div style="font-size:11px;font-style:italic;margin-top:7px;padding-top:7px;border-top:1px solid var(--border);">"${escapeHtml(p.notes)}"</div>` : ''}
-      </div>
-    `)
+        ${p.notes ? `<div style="font-size:11px;font-style:italic;margin-top:7px;padding-top:7px;border-top:1px solid var(--border);">"${escapeHtml(p.notes)}"</div>` : ''}`;
+
+  // Survey Answers for a pin linked to a Qualtrics response, for members
+  // and admins only (same gate as onPointClick). The link lives on the
+  // pin's copy in the community_contact blob (field_point_id →
+  // iaq_response_id); the answers and scores come from the current
+  // iaqData feature, never from the copy's stored iaq_* numbers.
+  if (_myRole === null && sbClient) await refreshMyRole();
+  const isTeamMember = _myRole === 'admin' || _myRole === 'member';
+  let iaqFeat = null;
+  if (isTeamMember) {
+    const copy = findFieldLinkedCopy(surveyData?.features, p.id);
+    if (copy) iaqFeat = resolveMatchedIaqFeature(copy.properties, copy.geometry?.coordinates);
+  }
+
+  if (!iaqFeat || !iaqFeat.properties) {
+    new maplibregl.Popup({ offset: 14, maxWidth: '260px' })
+      .setLngLat(coords)
+      .setHTML(`<div style="padding:10px 12px;font-family:var(--font);">${visitHtml}</div>`)
+      .addTo(map);
+    return;
+  }
+  const street = iaqFeat.properties.street_name;
+  const tabs = [
+    { label: 'Field Visit', content: `<div class="popup-body">${visitHtml}</div>` },
+    { label: 'Survey Answers', content: buildSurveyAnswersTab(iaqFeat.properties) },
+  ];
+  const popup = new maplibregl.Popup({ offset: 14, maxWidth: '400px' })
+    .setLngLat(coords)
+    .setHTML(buildTabbedPopup(street ? `Field visit · ${street}` : 'Field visit', tabs, 0))
     .addTo(map);
+  attachPopupTabEvents(popup);
 }
 
 async function initFieldPoints() {
