@@ -33,6 +33,13 @@ from _processing import (
     _apply_iaq_to_field_features, tag_contact_match_status,
     dedup_contacts_at_parcel, PII_COLS,
 )
+from _field_layer import (
+    FIELD_COLS_BASE as _FIELD_COLS_BASE,
+    FIELD_COLS_ENRICHED as _FIELD_COLS_ENRICHED,
+    field_row_to_feature, load_all_field_rows, rebuild_field_layer,
+    is_field_feature, features_signature,
+)
+from _dashboard_writes import commit_dashboard_writes, load_blob_with_stamp
 
 try:
     import pandas as _pd
@@ -78,76 +85,15 @@ def _sync_community_contacts(sb, features: list) -> None:
 
 
 def _field_row_to_feature(row: dict):
-    lon = row.get('lon')
-    lat = row.get('lat')
-    if lon is None or lat is None:
-        return None
-    return {
-        'type': 'Feature',
-        'geometry': {'type': 'Point', 'coordinates': [lon, lat]},
-        'properties': {
-            'source': 'field',
-            'field_point_id': row.get('id'),
-            'status': row.get('status') or 'Unknown',
-            'street_name': 'Field Survey',
-            'notes': row.get('notes') or '',
-            'collector': row.get('collector_name'),
-            'collector_id': row.get('collector_id'),
-            'collected_at': row.get('collected_at'),
-            # Migration 27 (optional field-pin address). row.get() is safe
-            # even on the base (pre-migration) select below, which never
-            # includes the key at all.
-            'address': row.get('address') or None,
-        },
-    }
-
-
-_FIELD_COLS_BASE     = 'id, lat, lon, status, notes, collector_id, collector_name, collected_at'
-_FIELD_COLS_ENRICHED = _FIELD_COLS_BASE + ', address'
+    """Kept for importers/tests; the one definition lives in _field_layer."""
+    return field_row_to_feature(row)
 
 
 def _load_all_field_features(sb) -> list:
-    """Load every field_survey_points row as GeoJSON features.
-
-    Tries the migration-27 `address` column first so a saved field-pin
-    address surfaces on the dashboard popup; on ANY exception (PostgREST
-    rejects a SELECT that references a column the live schema doesn't
-    have — migration 27 not applied yet) falls back to the base column
-    set, mirroring `_insert_version_row`'s enriched-then-fallback
-    pattern. Falling back happens once, at the first page, so a genuine
-    unrelated failure on a later page still raises normally.
-    """
-    rows: list = []
-    page = 1000
-    hard_cap = 100_000
-    offset = 0
-    cols = _FIELD_COLS_ENRICHED
-    while offset < hard_cap:
-        try:
-            batch = (
-                sb.table('field_survey_points')
-                .select(cols)
-                .range(offset, offset + page - 1)
-                .execute()
-                .data
-            ) or []
-        except Exception as e:
-            if cols is _FIELD_COLS_ENRICHED:
-                print(f"[upload/survey] field_survey_points select with address failed "
-                      f"({type(e).__name__}: {e}) — retrying without it "
-                      f"(migration 27 not applied?)")
-                cols = _FIELD_COLS_BASE
-                continue
-            raise
-        if not batch:
-            break
-        rows.extend(batch)
-        if len(batch) < page:
-            break
-        offset += page
-    if offset >= hard_cap and len(rows) >= hard_cap:
-        print(f"[upload/survey] WARNING: field_survey_points capped at {hard_cap} rows")
-    return [f for f in (_field_row_to_feature(r) for r in rows) if f is not None]
+    """Every field_survey_points row as a GeoJSON feature (migration-27
+    `address` column tolerated — see _field_layer.load_all_field_rows)."""
+    return [f for f in (field_row_to_feature(r)
+                        for r in load_all_field_rows(sb, "[upload]")) if f is not None]
 
 
 def _upgrade_field_points_iaq_matched(sb, upgraded_ids: list) -> None:
@@ -189,8 +135,7 @@ def _all_iaq_features(geojson) -> list:
 
 
 def _is_field_feature(f: dict) -> bool:
-    p = (f or {}).get('properties') or {}
-    return p.get('source') == 'field' or p.get('field_point_id') is not None
+    return is_field_feature(f)
 
 
 def evaluate_iaq_upload_safety(stored_features: list, incoming_features: list,
@@ -314,6 +259,203 @@ def _resolve_uploader_email(sb, uid):
         return None
 
 
+def _reject(status: int, detail: str, **extra) -> dict:
+    return {'status': status, 'body': {'detail': detail, **extra}}
+
+
+def prepare_iaq_upload(sb, filename: str, csv_bytes: bytes, *, force: bool = False,
+                       admin_uid=None, uploader_email=None, parcel_idx=None) -> dict:
+    """Everything a Qualtrics upload does EXCEPT writing.
+
+    Returns {'status': 200, 'body': <response JSON>, 'blobs': [...],
+    'versions': [...], 'upgraded_ids': [...], 'field_report': {...}} or
+    {'status': 4xx/5xx, 'body': {'detail': ...}}. All reads and all
+    computation happen here, so commit_iaq_upload is one transaction
+    (audit 2026-10-13 F8). scripts/prod_runbook.py calls this same
+    function, so a scripted re-run is byte-for-byte the real path.
+    """
+    if Path(filename or '').suffix.lower() != '.csv':
+        return _reject(400, (
+            f'Received a {Path(filename or "").suffix.upper() or "non-CSV"} file. '
+            'Please export from Qualtrics as CSV: '
+            'Data → Export & Import → Export Data → CSV format.'))
+
+    try:
+        contact_blob, _ = load_blob_with_stamp(sb, 'community_contact')
+        stored_iaq, _ = load_blob_with_stamp(sb, 'iaq_survey')
+        field_rows = load_all_field_rows(sb, '[upload/iaq]')
+    except Exception as e:
+        print(f"[upload/iaq] read FAIL {type(e).__name__}: {e}")
+        return _reject(500, 'Could not read the stored dashboard data — nothing was changed. '
+                            'Check Vercel logs.')
+    contact_blob = contact_blob or {}
+    old_contact_feats = list(contact_blob.get('features') or [])
+    # Signature BEFORE processing: process_iaq_bytes and the tagger mutate
+    # the contact dicts in place.
+    old_contact_sig = features_signature(old_contact_feats)
+    # Field half rebuilt from the table: deleted pins drop out, pins that
+    # swallowed a CSV contact give it back (audit F4 / Q4-03).
+    rebuilt, field_report = rebuild_field_layer(old_contact_feats, field_rows)
+    contact_only_feats = [f for f in rebuilt if not _is_field_feature(f)]
+    field_feats = [f for f in rebuilt if _is_field_feature(f)]
+    print(f"[upload/iaq] contacts={len(contact_only_feats)} field={len(field_feats)} "
+          f"field_removed={len(field_report['removed'])} "
+          f"restored={field_report['restored_contacts']}")
+    if not contact_only_feats:
+        return _reject(400, ('No Community Contact data found. Upload the Community '
+                             'Contact CSV/XLSX first, then re-upload the Qualtrics file.'))
+
+    if parcel_idx is None:
+        try:
+            parcel_idx = load_parcel_index()
+        except Exception as e:
+            tb = traceback.format_exc()
+            print(f"[upload/iaq] parcel-index FAIL {type(e).__name__}: {e}\n{tb[:1500]}")
+            return _reject(500, 'Could not load parcel index — check Vercel logs.')
+
+    try:
+        geojson, analysis, streets, n_upgraded, failed_geocodes = process_iaq_bytes(
+            csv_bytes, contact_only_feats, parcel_idx)
+    except _PD_PARSE_ERR as e:
+        print(f"[upload/iaq] pandas parse error: {e}")
+        return _reject(400, 'Could not parse CSV. Re-export from Qualtrics as CSV (UTF-8).')
+    except ValueError as e:
+        print(f"[upload/iaq] validation error: {e}")
+        return _reject(400, str(e))
+    except Exception as e:
+        tb = traceback.format_exc()
+        print(f"[upload/iaq] processing FAIL {type(e).__name__}: {e}\n{tb[:2000]}")
+        return _reject(500, 'Processing failed — check Vercel logs.')
+
+    # ── SAFETY GUARD — before anything is queued for writing ────────
+    stored_feats = ((stored_iaq or {}).get('geojson') or {}).get('features') or []
+    safety = evaluate_iaq_upload_safety(
+        stored_feats, geojson.get('features', []), analysis, filename, force)
+    print(f"[upload/iaq] safety={safety['reason'] or 'ok'} "
+          f"dropped={len(safety['diff']['dropped'])} added={len(safety['diff']['added'])} "
+          f"force={force}")
+    if not safety['allowed']:
+        return _reject(409, safety['detail'],
+                       reason=safety['reason'],
+                       dropped_response_ids=safety['diff']['dropped'],
+                       added_response_ids=safety['diff']['added'])
+
+    iaq_feats = geojson.get('features', [])
+    n = len(iaq_feats)
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    # Field pins are matched against THIS upload's responses, so the
+    # scores copied onto a pin can never go stale (audit F5), and a
+    # response linked only by a field pin is saved as 'matched' (Q2-F9).
+    n_field_upgraded = 0
+    if iaq_feats and field_feats:
+        n_field_upgraded = _apply_iaq_to_field_features(
+            field_feats, iaq_feats, parcel_idx=parcel_idx)
+        for f in iaq_feats:
+            p = f.get('properties') or {}
+            p['match_status'] = 'matched' if p.get('iaq_matched') else 'iaq_only'
+    upgraded_ids = [
+        ff['properties']['field_point_id'] for ff in field_feats
+        if ff['properties'].get('has_iaq_survey')
+        and ff['properties'].get('status') == 'Completed'
+    ]
+
+    # Tag + parcel-dedup CONTACTS only (never field pins — a pin must not
+    # swallow a CSV contact; see dedup_contacts_at_parcel docstring).
+    tag_contact_match_status(contact_only_feats)
+    contact_only_feats = dedup_contacts_at_parcel(contact_only_feats)
+    updated_feats = list(contact_only_feats) + list(field_feats)
+    updated_contact = {**contact_blob, 'type': 'FeatureCollection', 'features': updated_feats}
+
+    validation = analysis.get('validation', {}) or {}
+    warn = analysis.get('validation_warnings', {}) or {}
+    if warn:
+        validation = {**validation, 'warnings': warn}
+    payload = {
+        'geojson':         geojson,
+        'analysis':        analysis,
+        'street_stats':    streets,
+        'validation':      validation,
+        'source_filename': filename,
+    }
+    audit = {
+        'uploaded_by_user_id': admin_uid,
+        'uploaded_by_email':   uploader_email,  # best-effort — see _resolve_uploader_email
+        'source_filename':     filename,
+    }
+    blobs = [{'data_type': 'iaq_survey', 'payload': payload}]
+    versions = [{
+        'data_type': 'iaq_survey',
+        'payload':   payload,
+        'label':     f'Vercel Upload {today} — {n} responses · {filename}',
+        'n_points':  n,
+        **audit,
+        'source_row_count':     n,
+        'geocoded_count':       n,
+        'failed_geocodes':      failed_geocodes or [],
+        'dropped_response_ids': safety['diff']['dropped'],
+        'forced':               force,
+    }]
+    if old_contact_sig != features_signature(updated_feats):
+        n_removed = len(field_report['removed'])
+        blobs.append({'data_type': 'community_contact', 'payload': updated_contact})
+        versions.append({
+            'data_type': 'community_contact',
+            'payload':   updated_contact,
+            'label':     (f'IAQ-merged {today} — {n_upgraded} contacts upgraded'
+                          + (f', {n_removed} deleted pins removed' if n_removed else '')
+                          + f' · {filename}'),
+            'n_points':  len(updated_feats),
+            **audit,
+        })
+        # compute_contact_analysis returns parcel_stats: {} (no geopandas on
+        # Vercel) — merge so the Parcels tab stays populated.
+        blobs.append({'data_type': 'analysis',
+                      'payload': merge_preserve_analysis(compute_contact_analysis(updated_feats))})
+    if n_field_upgraded > 0:
+        versions.append({
+            'data_type': 'field_survey',
+            'payload':   {'n_field_upgraded': n_field_upgraded},
+            'label':     f'IAQ-merged {today} — {n_field_upgraded} field points completed · {filename}',
+            'n_points':  n_field_upgraded,
+            **audit,
+        })
+
+    n_streets = len([s for s, d in streets.items() if not d.get('insufficient_data')])
+    if failed_geocodes:
+        print(f"[upload/iaq] {len(failed_geocodes)} addresses failed geocoding: {failed_geocodes[:10]}")
+    print(f"[upload/iaq] prepared n={n} streets={n_streets} field_upgraded={n_field_upgraded}")
+    return {
+        'status': 200,
+        'body': {
+            'status':               'ok',
+            'points':               n,
+            'streets_analyzed':     n_streets,
+            'mean_risk':            analysis.get('scores', {}).get('mean_risk', 0),
+            'n_upgraded':           n_upgraded,
+            'n_field_upgraded':     n_field_upgraded,
+            'field_points_removed': len(field_report['removed']),
+            'validation':           validation,
+            'failed_geocodes':      failed_geocodes,
+        },
+        'blobs': blobs,
+        'versions': versions,
+        'upgraded_ids': upgraded_ids,
+        'field_report': field_report,
+    }
+
+
+def commit_iaq_upload(sb, plan: dict) -> dict:
+    """Write a prepare_iaq_upload plan: all blobs + version rows in one
+    transaction, then the (idempotent, never-raising) field-point status
+    sweep, which must only run once the data it reflects is saved."""
+    result = commit_dashboard_writes(sb, plan['blobs'], plan['versions'])
+    _upgrade_field_points_iaq_matched(sb, plan['upgraded_ids'])
+    print(f"[upload/iaq] committed mode={result['mode']} blobs={result['blobs_written']} "
+          f"versions={result['versions_written']}")
+    return result
+
+
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
@@ -363,233 +505,25 @@ class handler(BaseHTTPRequestHandler):
 
     # ── IAQ ─────────────────────────────────────────────────────────────
     def _handle_iaq(self, filename: str, csv_bytes: bytes, admin_uid=None, uploader_email=None):
-        if Path(filename or '').suffix.lower() != '.csv':
-            return json_response(self, 400, {
-                'detail': (
-                    f'Received a {Path(filename or "").suffix.upper() or "non-CSV"} file. '
-                    'Please export from Qualtrics as CSV: '
-                    'Data → Export & Import → Export Data → CSV format.'
-                )
-            })
         sb = supabase_admin() or supabase_anon()
         if not sb:
             return json_response(self, 500, {'detail': 'Supabase not configured.'})
-
-        contact_blob  = load_cached('community_contact') or {}
-        contact_feats = list(contact_blob.get('features', []))
-        contact_only_feats = [cf for cf in contact_feats if not _is_field_feature(cf)]
-        field_only_feats = [cf for cf in contact_feats if _is_field_feature(cf)]
-        print(f"[upload/iaq] contacts loaded n={len(contact_feats)}")
-        if not contact_only_feats:
-            return json_response(self, 400, {
-                'detail': (
-                    'No Community Contact data found. Upload the Community '
-                    'Contact CSV/XLSX first, then re-upload the Qualtrics file.'
-                ),
-            })
-
+        force = (parse_qs(urlparse(self.path).query).get('force', ['0'])[0] or '').lower() \
+            in ('1', 'true', 'yes')
+        plan = prepare_iaq_upload(sb, filename, csv_bytes, force=force,
+                                  admin_uid=admin_uid, uploader_email=uploader_email)
+        if plan['status'] != 200:
+            return json_response(self, plan['status'], plan['body'])
         try:
-            parcel_idx = load_parcel_index()
+            commit_iaq_upload(sb, plan)
         except Exception as e:
             tb = traceback.format_exc()
-            print(f"[upload/iaq] parcel-index FAIL {type(e).__name__}: {e}\n{tb[:1500]}")
-            return json_response(self, 500, {'detail': 'Could not load parcel index — check Vercel logs.'})
-
-        try:
-            geojson, analysis, streets, n_upgraded, failed_geocodes = process_iaq_bytes(
-                csv_bytes, contact_only_feats, parcel_idx)
-        except _PD_PARSE_ERR as e:
-            print(f"[upload/iaq] pandas parse error: {e}")
-            return json_response(self, 400, {
-                'detail': 'Could not parse CSV. Re-export from Qualtrics as CSV (UTF-8).',
+            print(f"[upload/iaq] commit FAIL {type(e).__name__}: {e}\n{tb[:2000]}")
+            return json_response(self, 500, {
+                'detail': ('Saving the upload failed. With migration 29 applied nothing '
+                           'was changed; check Vercel logs, then upload again.'),
             })
-        except ValueError as e:
-            print(f"[upload/iaq] validation error: {e}")
-            return json_response(self, 400, {'detail': str(e)})
-        except Exception as e:
-            tb = traceback.format_exc()
-            print(f"[upload/iaq] processing FAIL {type(e).__name__}: {e}\n{tb[:2000]}")
-            return json_response(self, 500, {'detail': 'Processing failed — check Vercel logs.'})
-
-        # ── SAFETY GUARD — must run before any upsert ────────────────
-        # Reads the currently-stored blob and refuses to replace it when
-        # that would delete responses or import a degraded export.
-        _stored_iaq = load_cached('iaq_survey') or {}
-        _stored_feats = (_stored_iaq.get('geojson') or {}).get('features') or []
-        _force = (parse_qs(urlparse(self.path).query).get('force', ['0'])[0] or '').lower() \
-                 in ('1', 'true', 'yes')
-        _safety = evaluate_iaq_upload_safety(
-            _stored_feats, geojson.get('features', []), analysis, filename, _force)
-        print(f"[upload/iaq] safety={_safety['reason'] or 'ok'} "
-              f"dropped={len(_safety['diff']['dropped'])} added={len(_safety['diff']['added'])} "
-              f"force={_force}")
-        if not _safety['allowed']:
-            return json_response(self, 409, {
-                'detail': _safety['detail'],
-                'reason': _safety['reason'],
-                'dropped_response_ids': _safety['diff']['dropped'],
-                'added_response_ids': _safety['diff']['added'],
-            })
-
-        n     = len(geojson.get('features', []))
-        today = datetime.now(timezone.utc).date().isoformat()
-        print(f"[upload/iaq] processed n_features={n} n_upgraded={n_upgraded}")
-
-        validation = analysis.get('validation', {}) or {}
-        warn = analysis.get('validation_warnings', {}) or {}
-        if warn:
-            validation = {**validation, 'warnings': warn}
-        payload = {
-            'geojson':         geojson,
-            'analysis':        analysis,
-            'street_stats':    streets,
-            'validation':      validation,
-            'source_filename': filename,
-        }
-
-        sb.table('keystone_dashboard_data').upsert(
-            {'data_type': 'iaq_survey', 'payload': payload},
-            on_conflict='data_type',
-        ).execute()
-        _insert_version_row(
-            sb,
-            base_fields={
-                'data_type': 'iaq_survey',
-                'payload':   payload,
-                'label':     f'Vercel Upload {today} — {n} responses · {filename}',
-                'n_points':  n,
-            },
-            extra_fields={
-                'uploaded_by_user_id':  admin_uid,
-                'uploaded_by_email':    uploader_email,  # best-effort — see _resolve_uploader_email
-                'source_filename':      filename,
-                'source_row_count':     n,
-                'geocoded_count':       n,
-                'failed_geocodes':      failed_geocodes or [],
-                'dropped_response_ids': _safety['diff']['dropped'],
-                'forced':               _force,
-            },
-        )
-
-        # Tag every contact with its match_status (G1/G2 stroke encoding
-        # on the desktop map). Run regardless of whether n_upgraded > 0
-        # — the IAQ upload could have *downgraded* nothing but still
-        # toggled a contact from G2 to G1, and we want the tag fresh.
-        # Then dedup at parcel rep-point so multiple CSV rows sharing a
-        # parcel collapse to a single dot (the highest-priority status
-        # wins; the rest move to coincident_contacts on the survivor).
-        # Without this pass, a Completed dot's wider yellow rim pokes
-        # out around a stacked Left Info dot at the same parcel.
-        dedup_dropped = 0
-        tag_changed = False
-        if contact_only_feats:
-            pre_tag = [(cf.get('properties') or {}).get('match_status') for cf in contact_only_feats]
-            tag_contact_match_status(contact_only_feats)
-            post_tag = [(cf.get('properties') or {}).get('match_status') for cf in contact_only_feats]
-            tag_changed = pre_tag != post_tag
-            pre_dedup_n = len(contact_only_feats)
-            contact_only_feats = dedup_contacts_at_parcel(contact_only_feats)
-            dedup_dropped = pre_dedup_n - len(contact_only_feats)
-        if (n_upgraded or dedup_dropped or tag_changed) and (contact_only_feats or field_only_feats):
-            updated_feats = list(contact_only_feats) + list(field_only_feats)
-            updated_contact = {**contact_blob, 'features': updated_feats}
-            sb.table('keystone_dashboard_data').upsert(
-                {'data_type': 'community_contact', 'payload': updated_contact},
-                on_conflict='data_type',
-            ).execute()
-            sb.table('keystone_analysis_versions').insert({
-                'data_type': 'community_contact',
-                'payload':   updated_contact,
-                'label':     f'IAQ-merged {today} — {n_upgraded} contacts upgraded · {filename}',
-                'n_points':  len(updated_feats),
-            }).execute()
-            contact_analysis = compute_contact_analysis(updated_feats)
-            # compute_contact_analysis returns parcel_stats: {} (Vercel
-            # can't run geopandas to recompute it). Merge with the
-            # existing analysis blob so the Parcels tab stays populated
-            # after every IAQ-triggered re-merge.
-            contact_analysis = merge_preserve_analysis(contact_analysis)
-            sb.table('keystone_dashboard_data').upsert(
-                {'data_type': 'analysis', 'payload': contact_analysis},
-                on_conflict='data_type',
-            ).execute()
-
-        # Upgrade live field_survey_points to Completed where IAQ matches.
-        n_field_upgraded = 0
-        iaq_feats = geojson.get('features', [])
-        if iaq_feats:
-            field_rows: list = []
-            PAGE = 1000
-            HARD_CAP = 100_000
-            offset = 0
-            try:
-                while offset < HARD_CAP:
-                    page = (sb.table('field_survey_points')
-                              .select('id, lat, lon, status')
-                              .range(offset, offset + PAGE - 1)
-                              .execute().data) or []
-                    if not page:
-                        break
-                    field_rows.extend(page)
-                    if len(page) < PAGE:
-                        break
-                    offset += PAGE
-                if len(field_rows) >= HARD_CAP:
-                    print(f"[upload/iaq] field_survey_points pagination capped at {HARD_CAP}")
-            except Exception as e:
-                print(f"[upload/iaq] field_survey_points read failed: {e}")
-                field_rows = []
-
-            if field_rows:
-                field_feats = [
-                    {
-                        'type': 'Feature',
-                        'geometry': {'type': 'Point',
-                                     'coordinates': [r['lon'], r['lat']]},
-                        'properties': {'field_point_id': r['id'],
-                                       'status': r.get('status') or 'Unknown'},
-                    }
-                    for r in field_rows
-                    if r.get('lon') is not None and r.get('lat') is not None
-                ]
-                # Pass parcel_idx so the matcher can do parcel-snap →
-                # coord-equality (the v3 GIS-correct path); falls back
-                # to a tight 30 m distance only if the field pin is
-                # outside any parcel.
-                n_field_upgraded = _apply_iaq_to_field_features(
-                    field_feats, iaq_feats, parcel_idx=parcel_idx)
-                upgraded_ids = [
-                    ff['properties']['field_point_id']
-                    for ff in field_feats
-                    if (ff['properties'].get('has_iaq_survey')
-                        and ff['properties'].get('status') == 'Completed')
-                ]
-                _upgrade_field_points_iaq_matched(sb, upgraded_ids)
-                if n_field_upgraded > 0:
-                    try:
-                        sb.table('keystone_analysis_versions').insert({
-                            'data_type': 'field_survey',
-                            'payload':   {'n_field_upgraded': n_field_upgraded},
-                            'label':     (f'IAQ-merged {today} — {n_field_upgraded} field points completed · {filename}'),
-                            'n_points':  n_field_upgraded,
-                        }).execute()
-                    except Exception as e:
-                        print(f"[upload/iaq] version insert (field_survey) failed: {e}")
-
-        n_streets = len([s for s, d in streets.items() if not d.get('insufficient_data')])
-        if failed_geocodes:
-            print(f"[upload/iaq] {len(failed_geocodes)} addresses failed geocoding: {failed_geocodes[:10]}")
-        print(f"[upload/iaq] done n={n} streets={n_streets} field_upgraded={n_field_upgraded}")
-        return json_response(self, 200, {
-            'status':            'ok',
-            'points':            n,
-            'streets_analyzed':  n_streets,
-            'mean_risk':         analysis.get('scores', {}).get('mean_risk', 0),
-            'n_upgraded':        n_upgraded,
-            'n_field_upgraded':  n_field_upgraded,
-            'validation':        validation,
-            'failed_geocodes':   failed_geocodes,
-        })
+        return json_response(self, 200, plan['body'])
 
     # ── Survey (community contacts) ────────────────────────────────────
     def _handle_survey(self, filename: str, file_bytes: bytes, admin_uid=None, uploader_email=None):
