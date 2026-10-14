@@ -64,6 +64,19 @@ let _resultsCharts = {};
 // Numeric-coded Qualtrics exports are decoded server-side; placeholders stay visible here as muted text.
 const _IAQ_PLACEHOLDER_RE = /^(click to write (scale point|choice)\s*\d*|skip(ped)?|no answer|--)$/i;
 
+/** Hospital visit (respiratory) → display text + tone. A blank answer is
+ *  "No answer", never "No" (two respondents left it blank and showed "No").
+ *  @returns {{ text: string, tone: 'yes'|'no'|'blank'|'other' }} */
+function formatHospitalVisit(raw) {
+  const s = raw == null ? '' : String(raw).trim();
+  const l = s.toLowerCase();
+  if (!l || l === 'nan' || l === 'no_answer' || l === 'blank') return { text: 'No answer', tone: 'blank' };
+  if (l === 'yes') return { text: 'Yes', tone: 'yes' };
+  if (l.startsWith('yes')) return { text: s, tone: 'yes' };
+  if (l === 'no') return { text: 'No', tone: 'no' };
+  return { text: s, tone: 'other' };
+}
+
 /** @returns {{ text: string, muted: boolean }} */
 function formatIaqAnswerCell(key, raw) {
   if (key === 'has_mold') {
@@ -74,9 +87,16 @@ function formatIaqAnswerCell(key, raw) {
       return { text: 'No', muted: false };
     }
   }
+  if (key === 'hospital_visit') {
+    const h = formatHospitalVisit(raw);
+    return { text: h.text, muted: h.tone === 'blank' };
+  }
   if (raw == null) return { text: '—', muted: true };
   const s = String(raw).trim();
   if (!s) return { text: '—', muted: true };
+  // "None" is an answer (water-problems matrix QID42, cooling, etc.), not a
+  // blank: show it as one, in one spelling, whatever case the export used.
+  if (/^none$/i.test(s)) return { text: 'None', muted: false };
   if (_IAQ_PLACEHOLDER_RE.test(s)) {
     return { text: `${s} (Qualtrics placeholder)`, muted: true };
   }
@@ -4480,6 +4500,12 @@ function _buildIaqSummaryTab(p) {
     ? `<div class="iaq-orphan-hdr">SURVEY ONLY — ${escapeHtml(_orphanAddressLabel(p))}
          <div class="iaq-orphan-sub">No canvass record for this address.</div></div>`
     : '';
+  const hosp = formatHospitalVisit(p.hospital_visit);
+  const hospHtml = hosp.tone === 'yes'
+    ? `<span style="color:var(--red)">${escapeHtml(hosp.text)}</span>`
+    : hosp.tone === 'blank'
+      ? `<span style="color:var(--muted);font-style:italic">${escapeHtml(hosp.text)}</span>`
+      : escapeHtml(hosp.text);
   return `
     <div class="popup-body">
       ${orphanHdr}
@@ -4494,7 +4520,7 @@ function _buildIaqSummaryTab(p) {
       <div class="popup-row"><span class="popup-label">Housing Type</span><span class="popup-value">${escapeHtml(p.housing_type || '—')}</span></div>
       <div class="popup-row"><span class="popup-label">Year Built</span><span class="popup-value">${escapeHtml(p.year_built || '—')}</span></div>
       <div class="popup-row"><span class="popup-label">Mold Present</span><span class="popup-value">${p.has_mold ? '<span style="color:var(--orange)">Yes</span>' : 'No'}</span></div>
-      <div class="popup-row"><span class="popup-label">Hospital Visit</span><span class="popup-value">${p.hospital_visit === 'yes' ? '<span style="color:var(--red)">Yes</span>' : 'No'}</span></div>
+      <div class="popup-row"><span class="popup-label">Hospital Visit</span><span class="popup-value">${hospHtml}</span></div>
     </div>`;
 }
 
