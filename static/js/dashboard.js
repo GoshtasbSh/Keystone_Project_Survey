@@ -151,6 +151,19 @@ function sharedCodeLabelState(analysis) {
   return { verified, unverified: new Set(verified ? [] : fields) };
 }
 
+// Households vs responses. After the latest-response-per-household rule the
+// analysis counts households; n_mapped_responses keeps the raw number so the
+// UI can say how many earlier repeat answers were left out. A blob written
+// before that rule has no n_households and is labelled "responses".
+function responseCountsSummary(analysis, validation) {
+  const a = analysis || {}, v = validation || {};
+  const households = Number(a.n_households ?? a.n_responses) || 0;
+  const excluded = Number(a.n_duplicates_excluded ?? v.duplicates_excluded) || 0;
+  const responses = Number(a.n_mapped_responses ?? (households + excluded)) || 0;
+  const unit = a.n_households != null ? 'households' : 'responses';
+  return { households, responses, excluded, unit };
+}
+
 // ==== PURE-HELPERS END ====
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -3823,6 +3836,7 @@ function showSummaryPopup(uploadResult, iaqAnaData) {
   const riskTiers = a.risk_tiers || {};
   const ownership = a.ownership  || {};
   const housing   = a.housing    || {};
+  const _rc = responseCountsSummary(a, v);
 
   // Top risk streets
   const allStreets = iaqAnaData?.street_stats || {};
@@ -3952,7 +3966,7 @@ function showSummaryPopup(uploadResult, iaqAnaData) {
       <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em">Risk Summary</div>
       <div class="stat-grid" style="grid-template-columns:repeat(4,1fr)">
         <div class="stat-card"><div class="label">Mean Risk</div><div class="value" style="color:var(--orange);font-size:22px">${scores.mean_risk || 0}</div><div class="sub">out of 100</div></div>
-        <div class="stat-card"><div class="label">High Risk</div><div class="value" style="color:var(--red);font-size:22px">${riskTiers.high || 0}</div><div class="sub">households</div></div>
+        <div class="stat-card"><div class="label">High Risk</div><div class="value" style="color:var(--red);font-size:22px">${riskTiers.high || 0}</div><div class="sub">${_rc.unit}</div></div>
         <div class="stat-card"><div class="label">Mold Reports</div><div class="value" style="color:var(--orange);font-size:22px">${health.mold_pct || 0}%</div></div>
         <div class="stat-card"><div class="label">Hospital Visits</div><div class="value" style="font-size:22px">${health.hospital_pct || 0}%</div><div class="sub">respiratory</div></div>
       </div>
@@ -4622,11 +4636,13 @@ function buildSurveyResultsTab(data) {
 
   const matchDetails = v.match_details || [];
   const coordBd     = coordSourceBreakdown(matchDetails);
-  const totalMapped = a.n_responses || 0;
+  const rc          = responseCountsSummary(a, v);
+  const totalMapped = rc.households;
+  const unitCap     = rc.unit === 'households' ? 'Households' : 'Responses';
 
   const _ctx = {
     scores, riskTiers, health, housing, ownership, rankedStreets, v,
-    coordBd, totalMapped,
+    coordBd, totalMapped, rc,
     residency, housingSafety, affordability, interventions, experiences,
     mobility, demoExt, surveyQs, chartSources,
   };
@@ -4654,7 +4670,7 @@ function buildSurveyResultsTab(data) {
     <!-- Overview -->
     <div id="res-pane-overview" class="res-pane">
       <div class="stat-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:8px">
-        <div class="stat-card"><div class="label">Mapped</div><div class="value" style="font-size:18px">${totalMapped}</div><div class="sub" title="Placed from the typed home address (Q212). Qualtrics GPS is not used.">${escapeHtml(coordSourceShort(coordBd))}</div></div>
+        <div class="stat-card"><div class="label">${unitCap}</div><div class="value" style="font-size:18px">${rc.households}</div><div class="sub" title="Placed from the typed home address (Q212). Qualtrics GPS is not used.">${escapeHtml(coordSourceShort(coordBd))}${rc.excluded ? `<br>${rc.responses} responses · ${rc.excluded} earlier repeat${rc.excluded === 1 ? '' : 's'} excluded` : ''}</div></div>
         <div class="stat-card"><div class="label">Mean Risk</div><div class="value" style="font-size:18px;color:var(--orange)">${scores.mean_risk||0}</div><div class="sub">/ 100</div></div>
         <div class="stat-card"><div class="label">High Risk</div><div class="value" style="font-size:18px;color:var(--red)">${riskTiers.high||0}</div><div class="sub">≥67 score</div></div>
         <div class="stat-card"><div class="label">Medium</div><div class="value" style="font-size:18px;color:var(--orange)">${riskTiers.medium||0}</div><div class="sub">34–66</div></div>
@@ -4670,7 +4686,7 @@ function buildSurveyResultsTab(data) {
     <!-- Health -->
     <div id="res-pane-health" class="res-pane" style="display:none">
       <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-        <div class="chart-box" style="flex:1.4;min-width:160px">${head('Symptom Prevalence — All Households (%)', 'symptoms')}<canvas id="rc-symptoms" height="110"></canvas></div>
+        <div class="chart-box" style="flex:1.4;min-width:160px">${head(`Symptom Prevalence — All ${unitCap} (%)`, 'symptoms')}<canvas id="rc-symptoms" height="110"></canvas></div>
         <div class="chart-box" style="flex:1.6;min-width:180px">${head('Respiratory &amp; Mold by Street (top 8 by risk)', 'mold_by_street')}<canvas id="rc-resp-street" height="110"></canvas></div>
       </div>
       <table class="data-table" style="font-size:11px">
@@ -4756,7 +4772,7 @@ function buildSurveyResultsTab(data) {
     <!-- Validation -->
     <div id="res-pane-validation" class="res-pane" style="display:none">
       <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:8px">
-        <div class="stat-card"><div class="label">IAQ Mapped</div><div class="value" style="font-size:18px">${v.total_iaq_responses||totalMapped}</div></div>
+        <div class="stat-card"><div class="label">Responses mapped</div><div class="value" style="font-size:18px">${rc.responses || v.total_iaq_responses || 0}</div>${rc.excluded ? `<div class="sub">${rc.households} households analysed</div>` : ''}</div>
         <div class="stat-card"><div class="label">Contact Completed</div><div class="value" style="font-size:18px">${v.total_completed_contacts||'—'}</div></div>
         <div class="stat-card"><div class="label">Confirmed</div><div class="value" style="font-size:18px;color:var(--green)">${v.matched_iaq_responses||'—'}</div><div class="sub">same parcel</div></div>
         <div class="stat-card"><div class="label">Match Rate</div>
@@ -4767,9 +4783,9 @@ function buildSurveyResultsTab(data) {
       <div class="stat-card" style="margin-bottom:8px;border-left:3px solid var(--orange)">
         <div class="label">Responses not charted</div>
         <div class="value" style="font-size:18px;color:var(--orange)">${v.dropped_no_geocode}</div>
-        <div class="sub">${v.completed_in_csv} completed in the CSV &rarr; ${v.total_iaq_responses} charted
-          (${v.charted_pct_of_completed}%). Every percentage on these tabs is out of
-          ${v.total_iaq_responses}, not ${v.completed_in_csv} &mdash; these addresses could not be placed on the map.</div>
+        <div class="sub">${v.completed_in_csv} completed in the CSV &rarr; ${rc.responses || v.total_iaq_responses} placed on the map
+          (${v.charted_pct_of_completed}%)${rc.excluded ? `, ${rc.excluded} of them earlier repeat answers from the same household` : ''}.
+          Every percentage on these tabs is out of ${rc.households} ${rc.unit}, not ${v.completed_in_csv} &mdash; these addresses could not be placed on the map.</div>
         ${(v.dropped_addresses||[]).length ? `<div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:6px;line-height:1.6">
           ${v.dropped_addresses.map(a=>escapeHtml(a)).join(' &middot; ')}</div>` : ''}
       </div>` : ''}
@@ -4825,10 +4841,10 @@ function buildSurveyResultsTab(data) {
     <!-- Well-being & Mobility -->
     <div id="res-pane-wellbeing" class="res-pane" style="display:none">
       <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:8px">
-        <div class="stat-card"><div class="label">Car access — Yes</div><div class="value" style="font-size:18px;color:var(--green)">${(mobility.car_access||{}).yes||0}</div><div class="sub">households</div></div>
-        <div class="stat-card"><div class="label">Car access — No</div><div class="value" style="font-size:18px;color:var(--orange)">${(mobility.car_access||{}).no||0}</div><div class="sub">households</div></div>
-        <div class="stat-card"><div class="label">Hurricane transport problems — Yes</div><div class="value" style="font-size:18px;color:var(--red)">${(mobility.hurricane_transport||{}).yes||0}</div><div class="sub">households</div></div>
-        <div class="stat-card"><div class="label">Hurricane — Not sure</div><div class="value" style="font-size:18px;color:var(--muted)">${(mobility.hurricane_transport||{}).not_sure||0}</div><div class="sub">households</div></div>
+        <div class="stat-card"><div class="label">Car access — Yes</div><div class="value" style="font-size:18px;color:var(--green)">${(mobility.car_access||{}).yes||0}</div><div class="sub">${rc.unit}</div></div>
+        <div class="stat-card"><div class="label">Car access — No</div><div class="value" style="font-size:18px;color:var(--orange)">${(mobility.car_access||{}).no||0}</div><div class="sub">${rc.unit}</div></div>
+        <div class="stat-card"><div class="label">Hurricane transport problems — Yes</div><div class="value" style="font-size:18px;color:var(--red)">${(mobility.hurricane_transport||{}).yes||0}</div><div class="sub">${rc.unit}</div></div>
+        <div class="stat-card"><div class="label">Hurricane — Not sure</div><div class="value" style="font-size:18px;color:var(--muted)">${(mobility.hurricane_transport||{}).not_sure||0}</div><div class="sub">${rc.unit}</div></div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <div class="chart-box" style="flex:1;min-width:200px">${head('Regular access to a car', 'car_access')}<canvas id="rc-car-access" height="120"></canvas><div class="chart-source">Source: ${escapeHtml(surveyQs.car_access || '')}</div></div>
@@ -4870,7 +4886,7 @@ function _initResultsCharts(tab, ctx) {
   const { scores, riskTiers, health, housing, rankedStreets, v,
           coordBd, ownership,
           residency, housingSafety, affordability, interventions,
-          experiences, mobility, demoExt, surveyQs } = ctx;
+          experiences, mobility, demoExt, surveyQs, rc } = ctx;
   const OPTS = {
     animation: false,
     plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10 }, boxWidth: 12 } } },
@@ -4917,7 +4933,7 @@ function _initResultsCharts(tab, ctx) {
     mk('rc-symptoms', {
       type: 'bar',
       data: { labels: ['Respiratory','Asthma','Wheeze','Mold','Hospital'],
-        datasets: [{ label: '% of households', barThickness: 22,
+        datasets: [{ label: `% of ${rc ? rc.unit : 'responses'}`, barThickness: 22,
           data: [health.respiratory_pct||0, health.asthma_pct||0, health.wheeze_pct||0, health.mold_pct||0, health.hospital_pct||0],
           backgroundColor: ['rgba(239,68,68,.75)','rgba(249,115,22,.75)','rgba(234,179,8,.75)','rgba(139,92,246,.75)','rgba(6,182,212,.75)'],
           borderRadius: 4 }] },
