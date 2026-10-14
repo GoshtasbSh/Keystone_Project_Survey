@@ -144,6 +144,9 @@ SURVEY_ANSWER_FIELDS = (
     # more than the public map needs, and the review note quotes both
     # house numbers.
     'house_number', 'recorded_date', 'match_review_note',
+    # Review flag and household bookkeeping (2026-10): members only. The
+    # earlier ResponseIds of a household are not shown on the public map.
+    'match_review', 'household_responses', 'superseded_response_ids',
 )
 
 
