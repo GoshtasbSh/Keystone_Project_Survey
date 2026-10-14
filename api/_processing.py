@@ -15,6 +15,7 @@ import io
 import json
 import logging
 import difflib
+import functools
 import urllib.request
 import urllib.parse
 from collections import Counter, defaultdict
@@ -1336,7 +1337,15 @@ def _extract_street_name(addr) -> str | None:
 
 
 def _street_core(text: str) -> str:
-    s = str(text).strip()
+    return _street_core_str(str(text))
+
+
+# Pure in its argument (module constants only), and every address is parsed
+# several times per upload (contact lookup, house-number checks, field
+# matching), so memoise on the string: the suffix check below runs difflib.
+@functools.lru_cache(maxsize=8192)
+def _street_core_str(text: str) -> str:
+    s = text.strip()
     s = re.sub(r',?\s*(Keystone Heights|KH|FL|Florida|\d{5}).*$', '', s, flags=re.IGNORECASE)
     s = _SUFFIX_RE.sub('', s)
     s = re.sub(r'\s+', ' ', s).strip().lower()
@@ -2744,6 +2753,15 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
 
     contact_lookup = _build_contact_lookup(contact_features)
     known_streets  = _build_known_streets(contact_lookup)
+    # _canonicalize_street fuzzy-matches against every known street; with
+    # known_streets fixed for this upload, each distinct name needs it once.
+    _canon_memo: dict = {}
+
+    def _canon_street(name):
+        hit = _canon_memo.get(name)
+        if hit is None:
+            hit = _canon_memo[name] = _canonicalize_street(name, known_streets)
+        return hit
 
     features: list = []
     failed_geocodes: list = []
@@ -2771,7 +2789,7 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
 
         q212 = row.get('Q212', '')
         street_name = _extract_street_name(q212) or 'Unknown'
-        street_name = _canonicalize_street(street_name, known_streets)
+        street_name = _canon_street(street_name)
 
         # ── ADDRESS-ONLY GEOCODING (v3, 2026-05-05) ───────────────────
         # The Qualtrics LocationLatitude / LocationLongitude is *where
@@ -2851,7 +2869,7 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
         # four rows and printing it twice on the same axis. Running the
         # canonicaliser after every assignment is what makes per-street
         # aggregation count a street once.
-        street_name = _canonicalize_street(street_name, known_streets)
+        street_name = _canon_street(street_name)
 
         features.append({
             'type': 'Feature',
