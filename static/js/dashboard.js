@@ -337,6 +337,24 @@ function communityCardCount(blobCount, liveTotal, liveReady) {
   return liveReady ? liveTotal : Math.max(blobCount, liveTotal);
 }
 
+// Home Condition doughnut: a fixed best-to-worst order and a colour per label,
+// so colour carries meaning whatever order housing.conditions arrives in
+// (first-seen order, and JSONB reorders keys). Unlisted labels go last, grey.
+const CONDITION_ORDER = ['Excellent', 'Good', 'Fair', 'Poor', 'Critical', 'Unknown'];
+const CONDITION_COLORS = {
+  Excellent: '#10b981', Good: '#14b8a6', Fair: '#f59e0b',
+  Poor: '#f97316', Critical: '#ef4444', Unknown: '#94a3b8',
+};
+function conditionChartSeries(conditions) {
+  const c = conditions || {};
+  const labels = [...CONDITION_ORDER.filter(k => k in c), ...Object.keys(c).filter(k => !CONDITION_ORDER.includes(k))];
+  return {
+    labels,
+    data: labels.map(k => c[k]),
+    colors: labels.map(k => CONDITION_COLORS[k] || CONDITION_COLORS.Unknown),
+  };
+}
+
 // ==== PURE-HELPERS END ====
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -5221,11 +5239,12 @@ function _initResultsCharts(tab, ctx) {
           backgroundColor: ['#3b82f6','#8b5cf6','#10b981','#475569'], borderWidth: 0 }] },
       options: { ...OPTS, cutout: '55%' },
     });
+    const condSeries = conditionChartSeries(housing.conditions);
     mk('rc-cond', {
       type: 'doughnut',
-      data: { labels: Object.keys(housing.conditions||{}),
-        datasets: [{ data: Object.values(housing.conditions||{}),
-          backgroundColor: ['#10b981','#f97316','#ef4444','#475569'], borderWidth: 0 }] },
+      data: { labels: condSeries.labels,
+        datasets: [{ data: condSeries.data,
+          backgroundColor: condSeries.colors, borderWidth: 0 }] },
       options: { ...OPTS, cutout: '55%' },
     });
     const top8s = rankedStreets.slice(0, 8);
