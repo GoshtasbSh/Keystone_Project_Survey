@@ -1322,6 +1322,23 @@ def _parse_addr_parts(addr) -> tuple | None:
     return m.group(1), _street_core(m.group(2))
 
 
+def _house_number(addr) -> str:
+    """House number of a typed address, normalised ('06318' -> '6318').
+
+    Empty string when the address has no leading number. Used to keep two
+    different houses that share one parcel point (a double lot, or a
+    Census snap to a neighbour's parcel) from being treated as one
+    household.
+    """
+    parsed = _parse_addr_parts(addr)
+    if not parsed:
+        return ''
+    try:
+        return str(int(parsed[0]))
+    except ValueError:
+        return parsed[0]
+
+
 def _build_contact_lookup(contact_features: list) -> dict:
     lookup = {}
     for f in contact_features:
@@ -1422,7 +1439,9 @@ def _match_iaq_to_contacts(iaq_features: list, contact_features: list,
          snaps to the parcel's representative_point. Same household =
          same rep-point (within `coord_eq_m`, default 1 m to absorb
          rounding noise). This catches cases where the typed addresses
-         differ but both resolved to the same parcel.
+         differ but both resolved to the same parcel — **and the same
+         house number**; a different number is flagged
+         ``match_review='house_number_mismatch'`` and not linked.
 
     No more radius-based distance fallback. With both sides at parcel
     centres, "near but different parcel" is a different household and
@@ -1433,6 +1452,7 @@ def _match_iaq_to_contacts(iaq_features: list, contact_features: list,
     """
     addr_lookup: dict = {}
     by_house: dict = {}
+    contact_house: dict = {}
     for ci, cf in enumerate(contact_features):
         addr = cf['properties'].get('address', '')
         parsed = _parse_addr_parts(addr)
@@ -1440,6 +1460,7 @@ def _match_iaq_to_contacts(iaq_features: list, contact_features: list,
             h, c = parsed
             addr_lookup[(h, c)] = ci
             by_house.setdefault(h, []).append((c, ci))
+            contact_house[ci] = _house_number(addr)
 
     # Reverse-lookup table: contact rep-point coord → contact index. Used
     # by tier 3 for O(1) coord equality. Quantised to ~1 m grid cells so
@@ -1460,6 +1481,7 @@ def _match_iaq_to_contacts(iaq_features: list, contact_features: list,
     for ii, iaq_f in enumerate(iaq_features):
         q212 = iaq_f['properties'].get('raw_address', '')
         iaq_lon, iaq_lat = iaq_f['geometry']['coordinates']
+        iaq_house = _house_number(q212)
         matched_ci = None
 
         # Tier 1 + 2: address-based.
@@ -1488,13 +1510,31 @@ def _match_iaq_to_contacts(iaq_features: list, contact_features: list,
             deg_per_m_lon = deg_per_m_lat / max(0.05, abs(_cos_deg(iaq_lat)))
             kx = round(iaq_lon / (cell_m * deg_per_m_lon))
             ky = round(iaq_lat / (cell_m * deg_per_m_lat))
+            mismatch_house = None
             for ci in coord_lookup.get((kx, ky), []):
                 if ci in used_contacts:
                     continue
                 c_lon, c_lat = contact_features[ci]['geometry']['coordinates']
-                if _haversine_m(iaq_lat, iaq_lon, c_lat, c_lon) <= coord_eq_m:
+                if _haversine_m(iaq_lat, iaq_lon, c_lat, c_lon) > coord_eq_m:
+                    continue
+                # Same parcel point is not enough: a double lot or a
+                # Census snap can put a neighbour's survey on this
+                # contact's point (6318 Amherst landed on the 6306
+                # contact, 6378 Antioch on 6376). Require the typed
+                # house number to equal the contact's; otherwise leave
+                # the response unmatched and flag it for review.
+                c_house = contact_house.get(ci, '')
+                if iaq_house and c_house == iaq_house:
                     matched_ci = ci
                     break
+                if mismatch_house is None:
+                    mismatch_house = c_house or '?'
+            if matched_ci is None and mismatch_house is not None:
+                iaq_f['properties']['match_review'] = 'house_number_mismatch'
+                iaq_f['properties']['match_review_note'] = (
+                    f"Typed house number {iaq_house or '?'} sits on the parcel "
+                    f"point of contact house number {mismatch_house}; "
+                    f"not linked automatically.")
 
         if matched_ci is not None:
             matches[ii] = matched_ci
