@@ -5,7 +5,9 @@ Consolidates the three previous endpoints (api/upload/iaq.py, .../survey.py,
 plan's 12-function ceiling. Behavior per branch is unchanged:
 
   ?type=iaq     — Qualtrics IAQ CSV. Score formulas, 4-tier geocoding,
-                  IAQ↔contact upgrade, field_survey_points status sweep.
+                  IAQ↔contact upgrade, field pins rebuilt and re-linked,
+                  linked field_survey_points rows flagged iaq_matched
+                  (their status is never changed).
   ?type=survey  — Community contact Excel/CSV. Geocoding + community_contacts
                   table mirror so the mobile field app stays in sync.
   ?type=results — Generic survey results CSV/Excel. PII_COLS stripped before
@@ -97,34 +99,24 @@ def _load_all_field_features(sb) -> list:
 
 
 def _upgrade_field_points_iaq_matched(sb, upgraded_ids: list) -> None:
-    """Bulk-mark field_survey_points rows Completed + iaq_matched=true.
-
-    Task 14: migration 22 added `field_survey_points.iaq_matched` but no
-    code path ever wrote it (stuck `false` on all rows). This is the
-    ONE place the codebase UPDATEs an existing field_survey_points row —
-    it already set `status: 'Completed'` for `upgraded_ids` (the ids the
-    IAQ matcher just confirmed this pass); we extend that SAME update to
-    also set `iaq_matched: true`, rather than adding a second write.
+    """Mark field_survey_points rows iaq_matched=true for the ids the IAQ
+    matcher linked this pass.
 
     Guarantees:
-      - Touches ONLY `status` and `iaq_matched` — never `notes`, `lat`,
-        `lon`, or `collected_at`.
-      - Only ever sets iaq_matched false -> true: `upgraded_ids` is
-        already the just-matched set, and there is no code path here
-        that flips it back to false.
-      - Never widens which rows are touched — same `upgraded_ids` list
-        the pre-existing status update used.
-      - Never raises — a failed bulk upgrade must not fail the upload
-        (the real IAQ data was already saved before this runs).
+      - Touches ONLY `iaq_matched`. The surveyor's `status`, `notes`,
+        position and times are never changed (user rule 2026-10-13).
+      - Only ever sets true; no path sets it back to false.
+      - Only the given ids; no write when the list is empty.
+      - Never raises: the survey data was already saved.
     """
     if not upgraded_ids:
         return
     try:
         sb.table('field_survey_points').update(
-            {'status': 'Completed', 'iaq_matched': True}
+            {'iaq_matched': True}
         ).in_('id', upgraded_ids).execute()
     except Exception as e:
-        print(f"[upload/iaq] bulk field-point upgrade failed n={len(upgraded_ids)}: {e}")
+        print(f"[upload/iaq] field-point iaq_matched update failed n={len(upgraded_ids)}: {e}")
 
 
 def _all_iaq_features(geojson) -> list:
@@ -485,12 +477,16 @@ def prepare_iaq_upload(sb, filename: str, csv_bytes: bytes, *, force: bool = Fal
     }
 
 
-def commit_iaq_upload(sb, plan: dict) -> dict:
+def commit_iaq_upload(sb, plan: dict, writeback_field_points: bool = True) -> dict:
     """Write a prepare_iaq_upload plan: all blobs + version rows in one
-    transaction, then the (idempotent, never-raising) field-point status
-    sweep, which must only run once the data it reflects is saved."""
+    transaction, then (unless switched off) mark linked field rows
+    iaq_matched=true. That flag is the only field_survey_points column an
+    upload may change."""
     result = commit_dashboard_writes(sb, plan['blobs'], plan['versions'])
-    _upgrade_field_points_iaq_matched(sb, plan['upgraded_ids'])
+    if writeback_field_points:
+        _upgrade_field_points_iaq_matched(sb, plan['upgraded_ids'])
+    else:
+        print(f"[upload/iaq] field write-back skipped for {len(plan['upgraded_ids'])} rows")
     print(f"[upload/iaq] committed mode={result['mode']} blobs={result['blobs_written']} "
           f"versions={result['versions_written']}")
     return result

@@ -151,7 +151,7 @@ class IaqUploadPlanTests(unittest.TestCase):
         U.commit_iaq_upload(sb, plan)
         self.assertEqual([w[0] for w in sb.writes], ["rpc", "update"])
         self.assertEqual(sb.writes[0][1], "keystone_commit_blobs")
-        self.assertEqual(sb.writes[1][2], {"status": "Completed", "iaq_matched": True})
+        self.assertEqual(sb.writes[1][2], {"iaq_matched": True})
 
     def test_failed_commit_skips_the_field_status_sweep(self):
         sb = _SB(self.blob, rpc_error="{'code': '57014', 'message': 'statement timeout'}")
@@ -232,6 +232,17 @@ class MergedIaqUploadTests(unittest.TestCase):
         body = _with_audit_trail({"status": "ok"}, {"version_statuses": ["full", "base_only"]})
         self.assertEqual(body["audit_trail"]["status"], "degraded")
         self.assertEqual(_with_audit_trail({}, {"version_statuses": ["full"]})["audit_trail"]["status"], "full")
+
+
+class WritebackSwitchTests(unittest.TestCase):
+    setUp = IaqUploadPlanTests.setUp
+    tearDown = IaqUploadPlanTests.tearDown
+
+    def test_writeback_can_be_skipped(self):
+        sb = _SB(self.blob)
+        plan = U.prepare_iaq_upload(sb, "oct.csv", b"x")
+        U.commit_iaq_upload(sb, plan, writeback_field_points=False)
+        self.assertEqual([w[0] for w in sb.writes], ["rpc"])
 
 
 if __name__ == "__main__":

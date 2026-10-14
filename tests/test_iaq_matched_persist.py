@@ -1,12 +1,11 @@
 """Tests for Task 14: field_survey_points.iaq_matched (added by migration 22)
 was `false` on all rows because no code path ever wrote it. This proves the
 one-and-only UPDATE this plan makes against an existing field_survey_points
-row (`_upgrade_field_points_iaq_matched` in api/upload.py, extending the
-pre-existing `status: 'Completed'` bulk update) is scoped exactly as the
-ruling requires:
+row (`_upgrade_field_points_iaq_matched` in api/upload.py) is scoped
+exactly as the ruling requires:
 
-  - touches ONLY `status` and `iaq_matched` — never `notes`, `lat`, `lon`,
-    or `collected_at`
+  - touches ONLY `iaq_matched` — never `status`, `notes`, `lat`, `lon`,
+    or `collected_at` (user rule 2026-10-13: never change a real field point)
   - only ever sets iaq_matched to True (never False)
   - only touches the rows in `upgraded_ids` — no widening
   - issues no write at all when `upgraded_ids` is empty
@@ -59,18 +58,16 @@ class _FakeSupabase:
 
 
 class UpgradeFieldPointsIaqMatchedTests(unittest.TestCase):
-    def test_sets_status_and_iaq_matched_only(self):
+    def test_sets_iaq_matched_only_never_status(self):
+        # User rule 2026-10-13: never change a real field point. The surveyor's
+        # status (e.g. 'Not Interested' on dee81ecd) must survive a survey link.
         sb = _FakeSupabase()
         _upgrade_field_points_iaq_matched(sb, ["id-1", "id-2"])
-
         self.assertEqual(len(sb.update_calls), 1)
         table, ids, patch = sb.update_calls[0]
         self.assertEqual(table, "field_survey_points")
         self.assertEqual(set(ids), {"id-1", "id-2"})
-        # Exactly these two keys — never notes/lat/lon/collected_at.
-        self.assertEqual(set(patch.keys()), {"status", "iaq_matched"})
-        self.assertEqual(patch["status"], "Completed")
-        self.assertIs(patch["iaq_matched"], True)
+        self.assertEqual(patch, {"iaq_matched": True})
 
     def test_never_sets_iaq_matched_false(self):
         sb = _FakeSupabase()
