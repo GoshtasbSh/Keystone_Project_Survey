@@ -10,6 +10,8 @@ plan's 12-function ceiling. Behavior per branch is unchanged:
                   (their status is never changed).
   ?type=survey  — Community contact Excel/CSV. Geocoding + community_contacts
                   table mirror so the mobile field app stays in sync.
+                  Refuses a file with no Address column or 0 placeable
+                  contacts, and a large drop unless ?force=1.
   ?type=results — Generic survey results CSV/Excel. PII_COLS stripped before
                   persisting under data_type='survey_results'.
 
@@ -148,6 +150,46 @@ def _is_field_feature(f: dict) -> bool:
     return is_field_feature(f)
 
 
+# A contacts upload that would shrink the stored contact set below this
+# fraction is refused unless ?force=1 (2026-07-20: a Qualtrics export
+# dropped into the contacts box replaced 277 contacts with 0).
+CONTACT_REGRESSION_RATIO = 0.8
+
+
+def evaluate_contact_upload_safety(stored_contact_count: int,
+                                   incoming_contact_count: int,
+                                   filename: str, force: bool) -> dict:
+    """Decide whether a Community Contact upload may replace the stored
+    contacts. Mirrors evaluate_iaq_upload_safety.
+
+      * 0 placeable contacts -> always refused (400), even with force:
+        there is no legitimate reason to wipe every contact.
+      * fewer than CONTACT_REGRESSION_RATIO x the stored count -> 409
+        unless force.
+    """
+    if incoming_contact_count <= 0:
+        return {
+            'allowed': False, 'status': 400, 'reason': 'no_contacts',
+            'detail': (
+                f"Refused: no address in '{filename}' could be placed on the map, "
+                f"so saving it would delete all {stored_contact_count} stored "
+                f"community contacts. Check that this is the Community Contact sheet."
+            ),
+        }
+    if (stored_contact_count and not force
+            and incoming_contact_count < stored_contact_count * CONTACT_REGRESSION_RATIO):
+        return {
+            'allowed': False, 'status': 409, 'reason': 'contact_regression',
+            'detail': (
+                f"Refused: '{filename}' has {incoming_contact_count} contacts but "
+                f"{stored_contact_count} are stored, so saving it would remove "
+                f"{stored_contact_count - incoming_contact_count} from the map. "
+                f"If this is intentional, confirm the upload (re-sent with ?force=1)."
+            ),
+        }
+    return {'allowed': True, 'status': 200, 'reason': None, 'detail': ''}
+
+
 def evaluate_iaq_upload_safety(stored_features: list, incoming_features: list,
                                analysis: dict, filename: str,
                                force: bool) -> dict:
@@ -237,8 +279,9 @@ def _insert_version_row(sb, base_fields: dict, extra_fields: dict) -> None:
 
 
 def _audit_trail_summary(statuses) -> dict:
-    """Fold the per-insert statuses from _insert_version_row into the
-    `audit_trail` field of the upload response. The worst status wins."""
+    """Fold the per-version statuses (commit_dashboard_writes(...)
+    ['version_statuses']) into the `audit_trail` field of the upload
+    response. The worst status wins."""
     statuses = list(statuses)
     if 'failed' in statuses:
         return {
@@ -569,6 +612,17 @@ class handler(BaseHTTPRequestHandler):
         sb = supabase_admin() or supabase_anon()
         if not sb:
             return json_response(self, 500, {'detail': 'Supabase not configured.'})
+        force = (parse_qs(urlparse(self.path).query).get('force', ['0'])[0] or '').lower() \
+            in ('1', 'true', 'yes')
+        try:
+            stored_blob, _ = load_blob_with_stamp(sb, 'community_contact')
+            stored_iaq, _ = load_blob_with_stamp(sb, 'iaq_survey')
+        except Exception as e:
+            print(f"[upload/survey] read FAIL {type(e).__name__}: {e}")
+            return json_response(self, 500, {
+                'detail': 'Could not read the stored contacts — nothing was changed. Check Vercel logs.'})
+        stored_contacts = sum(1 for f in (stored_blob or {}).get('features') or []
+                              if not _is_field_feature(f))
         try:
             parcel_idx = load_parcel_index()
         except Exception as e:
@@ -585,75 +639,79 @@ class handler(BaseHTTPRequestHandler):
             print(f"[upload/survey] processing FAIL {type(e).__name__}: {e}\n{tb[:2000]}")
             return json_response(self, 500, {'detail': 'Processing failed — check Vercel logs.'})
 
-        n     = len(survey_data.get('features', []))
-        today = datetime.now(timezone.utc).date().isoformat()
-        label = f'Vercel Upload {today} — {n} contacts · {filename}'
-        print(f"[upload/survey] processed n={n}")
-
-        # Fresh CSV upload starts with no IAQ tags. Mark every Completed
-        # contact as 'contact_only' so the desktop map shows them with
-        # the amber G2 stroke until the next IAQ upload promotes them.
-        # Then dedup at the parcel rep-point so multiple CSV rows
-        # sharing a parcel collapse to a single dot (highest-priority
-        # status wins; the rest move to coincident_contacts on the
-        # survivor). See dedup_contacts_at_parcel() docstring for why.
+        # Fresh CSV upload starts with no IAQ tags (Completed -> 'contact_only'
+        # until the next IAQ upload), then parcel dedup of CONTACTS only.
         contact_feats = survey_data.get('features', [])
         tag_contact_match_status(contact_feats)
         contact_feats = dedup_contacts_at_parcel(contact_feats)
 
-        # Keep dashboard community points as "CSV contacts + existing field points"
-        # so users always see one combined layer immediately after CSV upload.
-        field_feats = _load_all_field_features(sb)
-        # Keep CSV contacts authoritative (already tagged + deduped).
-        # Append field features as-is so both datasets are visible/countable
-        # without cross-source winner-take-all dedup side effects.
-        merged_feats = list(contact_feats) + list(field_feats)
+        safety = evaluate_contact_upload_safety(stored_contacts, len(contact_feats), filename, force)
+        print(f"[upload/survey] safety={safety['reason'] or 'ok'} stored={stored_contacts} "
+              f"incoming={len(contact_feats)} force={force}")
+        if not safety['allowed']:
+            return json_response(self, safety['status'], {
+                'detail': safety['detail'], 'reason': safety['reason'],
+                'stored_contacts': stored_contacts, 'incoming_contacts': len(contact_feats),
+            })
 
+        # Field half straight from the table, linked to the stored responses
+        # so a pin keeps its survey link across a contacts upload.
+        try:
+            field_feats = _load_all_field_features(sb)
+        except Exception as e:
+            print(f"[upload/survey] field read FAIL {type(e).__name__}: {e}")
+            return json_response(self, 500, {
+                'detail': 'Could not read the field survey points — nothing was changed. Check Vercel logs.'})
+        iaq_feats = ((stored_iaq or {}).get('geojson') or {}).get('features') or []
+        if iaq_feats and field_feats:
+            _apply_iaq_to_field_features(field_feats, iaq_feats, parcel_idx=parcel_idx)
+        merged_feats = list(contact_feats) + list(field_feats)
         survey_data['features'] = merged_feats
         n = len(merged_feats)
+        today = datetime.now(timezone.utc).date().isoformat()
 
-        sb.table('keystone_dashboard_data').upsert(
-            {'data_type': 'community_contact', 'payload': survey_data},
-            on_conflict='data_type',
-        ).execute()
-        _insert_version_row(
-            sb,
-            base_fields={
-                'data_type': 'community_contact',
-                'payload':   survey_data,
-                'label':     label,
-                'n_points':  n,
-            },
-            extra_fields={
-                'uploaded_by_user_id':  admin_uid,
-                'uploaded_by_email':    uploader_email,  # best-effort — see _resolve_uploader_email
-                'source_filename':      filename,
-                'source_row_count':     len(contact_feats),
-                'geocoded_count':       n,
-                'failed_geocodes':      failed_geocodes or [],
-            },
-        )
-        contact_analysis = compute_contact_analysis(survey_data.get('features', []))
-        # Same parcel-preservation merge as the IAQ branch — without
-        # this, every survey CSV upload zeros out the Parcels tab on
-        # the dashboard until scripts/ingest.py is rerun locally.
-        contact_analysis = merge_preserve_analysis(contact_analysis)
-        sb.table('keystone_dashboard_data').upsert(
-            {'data_type': 'analysis', 'payload': contact_analysis},
-            on_conflict='data_type',
-        ).execute()
+        try:
+            result = commit_dashboard_writes(
+                sb,
+                blobs=[
+                    {'data_type': 'community_contact', 'payload': survey_data},
+                    # parcel_stats preserved — see merge_preserve_analysis.
+                    {'data_type': 'analysis',
+                     'payload': merge_preserve_analysis(compute_contact_analysis(merged_feats))},
+                ],
+                versions=[{
+                    'data_type': 'community_contact',
+                    'payload':   survey_data,
+                    'label':     f'Vercel Upload {today} — {len(contact_feats)} contacts · {filename}',
+                    'n_points':  n,
+                    'uploaded_by_user_id': admin_uid,
+                    'uploaded_by_email':   uploader_email,
+                    'source_filename':     filename,
+                    'source_row_count':    len(contact_feats),
+                    'geocoded_count':      n,
+                    'failed_geocodes':     failed_geocodes or [],
+                    'forced':              force,
+                }],
+            )
+        except Exception as e:
+            tb = traceback.format_exc()
+            print(f"[upload/survey] commit FAIL {type(e).__name__}: {e}\n{tb[:2000]}")
+            return json_response(self, 500, {
+                'detail': ('Saving the upload failed. With migration 29 applied nothing '
+                           'was changed; check Vercel logs, then upload again.'),
+            })
         _sync_community_contacts(sb, contact_feats)
 
         if failed_geocodes:
             print(f"[upload/survey] {len(failed_geocodes)} addresses failed geocoding: {failed_geocodes[:10]}")
-        return json_response(self, 200, {
+        return json_response(self, 200, _with_audit_trail({
             'status':          'ok',
             'points':          n,
             'contact_points':  len(contact_feats),
             'field_points':    len(field_feats),
             'filename':        filename,
             'failed_geocodes': failed_geocodes,
-        })
+        }, result))
 
     # ── Results (generic CSV/XLSX) ─────────────────────────────────────
     def _handle_results(self, filename: str, file_bytes: bytes):
@@ -682,10 +740,7 @@ class handler(BaseHTTPRequestHandler):
         sb = supabase_admin() or supabase_anon()
         if not sb:
             return json_response(self, 500, {'detail': 'Supabase not configured — data not saved.'})
-        sb.table('keystone_dashboard_data').upsert(
-            {'data_type': 'survey_results', 'payload': payload},
-            on_conflict='data_type',
-        ).execute()
+        commit_dashboard_writes(sb, [{'data_type': 'survey_results', 'payload': payload}], [])
         return json_response(self, 200, {
             'status':  'ok',
             'rows':    len(df),

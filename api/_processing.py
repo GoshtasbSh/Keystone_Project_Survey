@@ -3019,6 +3019,16 @@ def process_survey_bytes(file_bytes: bytes, filename: str,
     suf = Path(filename).suffix.lower()
     df = pd.read_csv(io.BytesIO(file_bytes)) if suf == '.csv' else \
          pd.read_excel(io.BytesIO(file_bytes))
+    if 'Address' not in df.columns:
+        cols = {str(c).strip() for c in df.columns}
+        if cols & {'ResponseId', 'Finished', 'Q212'}:
+            raise ValueError(
+                "This file is a Qualtrics survey export, not the Community Contact "
+                "sheet. Upload it in the Qualtrics (IAQ) box instead; nothing was changed.")
+        raise ValueError(
+            "The file has no 'Address' column, so no contact could be placed and "
+            "nothing was changed. Upload the Community Contact sheet "
+            "(columns: Address, First attempt, Second attempt, Other notes: , date).")
 
     features: list = []
     failed_geocodes: list = []
