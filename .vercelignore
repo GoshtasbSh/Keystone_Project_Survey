@@ -46,3 +46,11 @@ final review/
 user_manual/
 tests/
 .playwright-mcp/
+
+# Internal notes at the repo root were publicly served as static files
+# (audit 2026-10-13 DEP-9: /DEPLOY.md, /PARITY.md, /AUDIT_PHASE3.md,
+# /PHASE1_DEPLOY.md, /PI_PRESENTATION.md, /REVIEW_STATUS.md all 200).
+# Root-anchored so no deployed sub-directory is affected. requirements.txt
+# must NOT be listed — Vercel installs the Python deps from it.
+/*.md
+/.env.example

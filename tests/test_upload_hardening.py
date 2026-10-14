@@ -90,5 +90,41 @@ class UploadSizeLimitTests(unittest.TestCase):
         self.assertIn("force=1", js)
 
 
+
+class VercelIgnoreTests(unittest.TestCase):
+    """DEP-9: internal root markdown must not be deployed (served as static
+    files); requirements.txt must stay (Vercel installs from it)."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Evaluate .vercelignore ALONE (gitignore syntax, which Vercel uses)
+        # in a throwaway repo, so the project's own .gitignore cannot make
+        # a check pass by accident.
+        cls._tmp = tempfile.TemporaryDirectory()
+        subprocess.run(["git", "init", "-q", cls._tmp.name], check=True)
+        shutil.copy(ROOT / ".vercelignore", pathlib.Path(cls._tmp.name) / ".gitignore")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def _ignored(self, path):
+        r = subprocess.run(["git", "check-ignore", "--no-index", "-q", path],
+                           cwd=self._tmp.name, capture_output=True)
+        return r.returncode == 0
+
+    def test_root_markdown_is_ignored(self):
+        for f in ("DEPLOY.md", "PARITY.md", "AUDIT_PHASE3.md", "PHASE1_DEPLOY.md",
+                  "PI_PRESENTATION.md", "REVIEW_STATUS.md",
+                  "KeyStone_Project_Resume_Dossier.md", ".env.example"):
+            self.assertTrue(self._ignored(f), f)
+
+    def test_runtime_files_are_not_ignored(self):
+        for f in ("requirements.txt", "vercel.json", "api/upload.py",
+                  "static/js/dashboard.js", "static/index.html",
+                  "keystone_field_web/index.html"):
+            self.assertFalse(self._ignored(f), f)
+
+
 if __name__ == "__main__":
     unittest.main()
