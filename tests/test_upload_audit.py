@@ -225,5 +225,28 @@ class ResolveUploaderEmailTests(unittest.TestCase):
         self.assertEqual(admin.calls, [], "must not even attempt the lookup without a uid")
 
 
+# ── DB-3: tell the uploader when the audit trail is degraded ──────────────
+from api.upload import _audit_trail_summary  # noqa: E402
+
+
+class AuditTrailSummaryTests(unittest.TestCase):
+    def test_all_full_is_full_with_no_detail(self):
+        self.assertEqual(_audit_trail_summary(['full', 'full']), {'status': 'full', 'detail': ''})
+
+    def test_no_inserts_is_full(self):
+        self.assertEqual(_audit_trail_summary([])['status'], 'full')
+
+    def test_any_base_only_is_degraded_and_names_migration_26(self):
+        s = _audit_trail_summary(['full', 'base_only'])
+        self.assertEqual(s['status'], 'degraded')
+        self.assertIn('migration 26', s['detail'])
+        self.assertIn('saved', s['detail'])
+
+    def test_any_failed_wins_over_degraded(self):
+        s = _audit_trail_summary(['base_only', 'failed'])
+        self.assertEqual(s['status'], 'missing')
+        self.assertIn('saved', s['detail'])
+
+
 if __name__ == '__main__':
     unittest.main()

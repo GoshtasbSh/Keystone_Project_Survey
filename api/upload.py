@@ -226,6 +226,27 @@ def _insert_version_row(sb, base_fields: dict, extra_fields: dict) -> None:
               f"was already saved to keystone_dashboard_data.")
 
 
+def _audit_trail_summary(statuses) -> dict:
+    """Fold the per-insert statuses from _insert_version_row into the
+    `audit_trail` field of the upload response. The worst status wins."""
+    statuses = list(statuses)
+    if 'failed' in statuses:
+        return {
+            'status': 'missing',
+            'detail': ('Your data was saved, but no History entry was written for at '
+                       'least one dataset, so this upload cannot be restored from '
+                       'History. Check the Vercel logs.'),
+        }
+    if 'base_only' in statuses:
+        return {
+            'status': 'degraded',
+            'detail': ('Your data was saved, but the uploader, filename and '
+                       'dropped-response audit fields were not recorded: the database '
+                       'is missing migration 26 (supabase/migrations/26_upload_audit_trail.sql).'),
+        }
+    return {'status': 'full', 'detail': ''}
+
+
 def _resolve_uploader_email(sb, uid):
     """Best-effort lookup of the uploader's email for the audit trail.
 

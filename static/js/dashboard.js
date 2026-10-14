@@ -4046,6 +4046,12 @@ async function uploadFile(zone, endpoint, file) {
       if (data.n_field_upgraded > 0) {
         showToast(`${data.n_field_upgraded} field survey point${data.n_field_upgraded > 1 ? 's' : ''} upgraded to Completed`);
       }
+      // Migration-26 fallback (api/upload.py _audit_trail_summary): the data
+      // was saved, but the History/audit row is partial or missing.
+      if (data.audit_trail && data.audit_trail.status && data.audit_trail.status !== 'full') {
+        showToast(`Upload saved, but History is incomplete: ${data.audit_trail.detail}`, 12000);
+        console.warn('Upload audit trail:', data.audit_trail);
+      }
       if (data.validation && data.validation.missing_columns) {
         showToast(`Warning: missing Qualtrics columns — affected scores default to 0. See console.`, 9000);
         console.warn('IAQ upload missing columns:', data.validation.missing_columns);
@@ -4068,6 +4074,13 @@ async function uploadFile(zone, endpoint, file) {
       zone.innerHTML = `<h4>Uploaded!</h4><p>${escapeHtml(file.name)}</p><p style="font-size:11px;color:var(--muted)">Loading data…</p>`;
 
       await refreshAllData();
+
+      // Migration-26 fallback (api/upload.py _audit_trail_summary): the data
+      // was saved, but the History/audit row is partial or missing.
+      if (data.audit_trail && data.audit_trail.status && data.audit_trail.status !== 'full') {
+        showToast(`Upload saved, but History is incomplete: ${data.audit_trail.detail}`, 12000);
+        console.warn('Upload audit trail:', data.audit_trail);
+      }
 
       // Auto-enable survey points layer so the user can see the data immediately
       if (surveyData?.features?.length) {
