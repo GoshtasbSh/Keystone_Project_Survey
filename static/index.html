@@ -1025,7 +1025,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;hei
       </div>
       <div class="upload-zone locked" id="upload-iaq" data-endpoint="/api/upload?type=iaq" data-accept=".csv">
         <h4>Keystone Heights Survey <span style="font-size:11px;font-weight:400;color:var(--muted)">(Qualtrics CSV)</span></h4>
-        <p>Qualtrics CSV export — IAQ, health symptoms, housing, GPS coordinates</p>
+        <p>Qualtrics CSV export — IAQ, health symptoms, housing, typed home address</p>
         <p style="margin-top:6px;font-size:11px;color:var(--accent)">Click or drag CSV file here</p>
         <input type="file" accept=".csv">
       </div>
@@ -1189,7 +1189,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;hei
     <div class="overlay-steps">
       <div class="overlay-step" id="ostep-upload"><div class="step-icon">1</div>Uploading file to server</div>
       <div class="overlay-step" id="ostep-parse"><div class="step-icon">2</div>Parsing Qualtrics CSV format</div>
-      <div class="overlay-step" id="ostep-geo"><div class="step-icon">3</div>Validating GPS coordinates</div>
+      <div class="overlay-step" id="ostep-geo"><div class="step-icon">3</div>Placing typed home addresses on parcels</div>
       <div class="overlay-step" id="ostep-score"><div class="step-icon">4</div>Computing health, IAQ &amp; structural scores</div>
       <div class="overlay-step" id="ostep-analysis"><div class="step-icon">5</div>Running street-level analysis</div>
       <div class="overlay-step" id="ostep-validate"><div class="step-icon">6</div>Cross-validating with contact data</div>

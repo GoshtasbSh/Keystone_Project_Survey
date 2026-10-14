@@ -103,6 +103,38 @@ function formatIaqAnswerCell(key, raw) {
   return { text: s, muted: false };
 }
 
+// How each mapped response got its coordinates. Keys are the exact
+// `coord_source` values api/_processing.py writes (address_matched and the
+// four ParcelIndex.geocode tiers). Qualtrics GPS is never used, so there is
+// no GPS row; anything unrecognised lands in "Other" so the rows always add
+// up to the total.
+const COORD_SOURCE_TIERS = [
+  // key,              label,                                  short,           colour
+  ['address_matched', 'Typed address matched a contact',      'address',       '#3b82f6'],
+  ['parcel_exact',    'Typed address matched a parcel',       'parcel',        '#10b981'],
+  ['parcel_fuzzy',    'Typed address ≈ parcel (fuzzy)',       'fuzzy parcel',  '#06b6d4'],
+  ['parcel_snapped',  'Census geocode snapped to a parcel',   'Census→parcel', '#8b5cf6'],
+  ['geocoded',        'Census geocode only (no parcel)',      'Census',        '#f59e0b'],
+];
+function coordSourceBreakdown(matchDetails) {
+  const rows = (Array.isArray(matchDetails) ? matchDetails : []).filter(d => d && !d.dup_excluded);
+  const counts = new Map();
+  for (const d of rows) counts.set(d.coord_source, (counts.get(d.coord_source) || 0) + 1);
+  const out = [];
+  for (const [key, label, short, color] of COORD_SOURCE_TIERS) {
+    const n = counts.get(key) || 0;
+    counts.delete(key);
+    if (n) out.push({ key, label, short, color, count: n });
+  }
+  let other = 0;
+  for (const n of counts.values()) other += n;
+  if (other) out.push({ key: 'other', label: 'Other / unknown source', short: 'other', color: '#6b7280', count: other });
+  return { total: rows.length, rows: out };
+}
+function coordSourceShort(bd) {
+  return bd.rows.length ? bd.rows.map(r => `${r.count} ${r.short}`).join(' · ') : 'no placement data';
+}
+
 // ==== PURE-HELPERS END ====
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -3725,7 +3757,7 @@ function hideAnalysisOverlay() {
 function simulateIAQSteps(xhrRef) {
   const schedule = [
     { delay: 1000, stepId: 'ostep-parse',    pct: 25, label: 'Parsing Qualtrics CSV...' },
-    { delay: 3000, stepId: 'ostep-geo',       pct: 42, label: 'Validating GPS coordinates...' },
+    { delay: 3000, stepId: 'ostep-geo',       pct: 42, label: 'Placing typed addresses on parcels...' },
     { delay: 7000, stepId: 'ostep-score',     pct: 60, label: 'Computing risk scores...' },
     { delay: 12000,stepId: 'ostep-analysis',  pct: 75, label: 'Running street-level analysis...' },
     { delay: 18000,stepId: 'ostep-validate',  pct: 88, label: 'Cross-validating with contact data...' },
@@ -3808,12 +3840,9 @@ function showSummaryPopup(uploadResult, iaqAnaData) {
     .sort(([, a2], [, b2]) => b2.count - a2.count)
     .slice(0, 8);
 
-  // Geocoding source breakdown from match_details
-  const _md = v.match_details || [];
-  const _gpsCt    = _md.filter(d => d.coord_source === 'gps').length;
-  const _addrCt   = _md.filter(d => d.coord_source === 'address_matched').length;
-  const _geoCt    = _md.filter(d => d.coord_source === 'geocoded').length;
-  const _totalMap = uploadResult.points || a.geocoded || 0;
+  // How responses were placed (typed address → contact / parcel / Census).
+  const _coordBd  = coordSourceBreakdown(v.match_details || []);
+  const _totalMap = uploadResult.points || a.geocoded || _coordBd.total || 0;
 
   body.innerHTML = `
     <!-- Data match banner -->
@@ -3825,10 +3854,8 @@ function showSummaryPopup(uploadResult, iaqAnaData) {
           <div style="font-size:11px;color:var(--text2);margin-top:2px">Responses Placed on Map</div>
         </div>
         <div style="flex:2;min-width:200px;background:rgba(255,255,255,.04);border-radius:8px;padding:10px 14px">
-          <div style="font-size:10px;font-weight:700;color:var(--muted);margin-bottom:7px;text-transform:uppercase;letter-spacing:.06em">Coordinate Source Breakdown</div>
-          ${_gpsCt  ? `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px;border-bottom:1px solid var(--border)"><span style="color:var(--green)">✓ GPS (in-field Qualtrics)</span><span style="font-family:var(--mono);font-weight:600">${_gpsCt} <span style="color:var(--muted);font-size:10px">(${Math.round(_gpsCt/_totalMap*100)}%)</span></span></div>` : ''}
-          ${_addrCt ? `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px;border-bottom:1px solid var(--border)"><span style="color:var(--cyan)">⊞ Address-matched to contact data</span><span style="font-family:var(--mono);font-weight:600">${_addrCt} <span style="color:var(--muted);font-size:10px">(${Math.round(_addrCt/_totalMap*100)}%)</span></span></div>` : ''}
-          ${_geoCt  ? `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px"><span style="color:var(--purple)">◎ Census geocoded (address fallback)</span><span style="font-family:var(--mono);font-weight:600">${_geoCt} <span style="color:var(--muted);font-size:10px">(${Math.round(_geoCt/_totalMap*100)}%)</span></span></div>` : ''}
+          <div style="font-size:10px;font-weight:700;color:var(--muted);margin-bottom:7px;text-transform:uppercase;letter-spacing:.06em">How responses were placed (typed address)</div>
+          ${_coordBd.rows.map((r, i) => `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px;${i < _coordBd.rows.length - 1 ? 'border-bottom:1px solid var(--border)' : ''}"><span style="color:${r.color}">${escapeHtml(r.label)}</span><span style="font-family:var(--mono);font-weight:600">${r.count} <span style="color:var(--muted);font-size:10px">(${_coordBd.total ? Math.round(r.count / _coordBd.total * 100) : 0}%)</span></span></div>`).join('')}
         </div>
         <div style="flex:1;min-width:100px;background:rgba(255,255,255,.04);border-radius:8px;padding:10px 14px;text-align:center">
           <div style="font-size:26px;font-weight:700;font-family:var(--mono)">${uploadResult.streets_analyzed || 0}</div>
@@ -3912,7 +3939,7 @@ function showSummaryPopup(uploadResult, iaqAnaData) {
       <div style="display:flex;flex-wrap:wrap;gap:5px">
         ${['Health Score (0–100)', 'Indoor Air Quality Score', 'Structural Score', 'Overall Risk Score',
            'Street Risk Rankings', 'Mold Analysis', 'Respiratory Health', 'Asthma &amp; Wheeze',
-           'Housing Age', 'Housing Type Breakdown', 'Owner vs Renter', 'GPS Cross-Validation',
+           'Housing Age', 'Housing Type Breakdown', 'Owner vs Renter', 'Address → Parcel Placement',
            'Privacy Enforcement (≥3 threshold)', 'LLM Context Builder'].map(tag =>
           `<span style="padding:3px 9px;border-radius:10px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.2);color:var(--accent);font-size:10px">${tag}</span>`
         ).join('')}
@@ -4568,14 +4595,12 @@ function buildSurveyResultsTab(data) {
     .sort(([, a2], [, b]) => b.mean_risk - a2.mean_risk);
 
   const matchDetails = v.match_details || [];
-  const gpsCount    = matchDetails.filter(d => d.coord_source === 'gps').length;
-  const addrCount   = matchDetails.filter(d => d.coord_source === 'address_matched').length;
-  const geocodedCount = matchDetails.filter(d => d.coord_source === 'geocoded').length;
+  const coordBd     = coordSourceBreakdown(matchDetails);
   const totalMapped = a.n_responses || 0;
 
   const _ctx = {
     scores, riskTiers, health, housing, ownership, rankedStreets, v,
-    gpsCount, addrCount, geocodedCount, totalMapped,
+    coordBd, totalMapped,
     residency, housingSafety, affordability, interventions, experiences,
     mobility, demoExt, surveyQs, chartSources,
   };
@@ -4603,7 +4628,7 @@ function buildSurveyResultsTab(data) {
     <!-- Overview -->
     <div id="res-pane-overview" class="res-pane">
       <div class="stat-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:8px">
-        <div class="stat-card"><div class="label">Mapped</div><div class="value" style="font-size:18px">${totalMapped}</div><div class="sub">${gpsCount} GPS · ${addrCount} addr · ${geocodedCount} geo</div></div>
+        <div class="stat-card"><div class="label">Mapped</div><div class="value" style="font-size:18px">${totalMapped}</div><div class="sub" title="Placed from the typed home address (Q212). Qualtrics GPS is not used.">${escapeHtml(coordSourceShort(coordBd))}</div></div>
         <div class="stat-card"><div class="label">Mean Risk</div><div class="value" style="font-size:18px;color:var(--orange)">${scores.mean_risk||0}</div><div class="sub">/ 100</div></div>
         <div class="stat-card"><div class="label">High Risk</div><div class="value" style="font-size:18px;color:var(--red)">${riskTiers.high||0}</div><div class="sub">≥67 score</div></div>
         <div class="stat-card"><div class="label">Medium</div><div class="value" style="font-size:18px;color:var(--orange)">${riskTiers.medium||0}</div><div class="sub">34–66</div></div>
@@ -4723,7 +4748,7 @@ function buildSurveyResultsTab(data) {
           ${v.dropped_addresses.map(a=>escapeHtml(a)).join(' &middot; ')}</div>` : ''}
       </div>` : ''}
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <div class="chart-box" style="flex:1;min-width:110px">${head('Coord Source', 'coord_source')}<canvas id="rc-coord-src" height="110"></canvas></div>
+        <div class="chart-box" style="flex:1;min-width:110px">${head('How responses were placed', 'coord_source')}<canvas id="rc-coord-src" height="110"></canvas></div>
         ${v.unmatched_by_street && Object.keys(v.unmatched_by_street).length ? `
         <div class="chart-box" style="flex:2;min-width:160px">${head('Unmatched Responses by Street', 'unmatched')}
           <div style="display:flex;flex-wrap:wrap;gap:5px;padding-top:4px">
@@ -4816,7 +4841,7 @@ function buildSurveyResultsTab(data) {
 
 function _initResultsCharts(tab, ctx) {
   const { scores, riskTiers, health, housing, rankedStreets, v,
-          gpsCount, addrCount, geocodedCount, ownership,
+          coordBd, ownership,
           residency, housingSafety, affordability, interventions,
           experiences, mobility, demoExt, surveyQs } = ctx;
   const OPTS = {
@@ -4954,11 +4979,12 @@ function _initResultsCharts(tab, ctx) {
   }
 
   if (tab === 'validation') {
+    const rows = (coordBd && coordBd.rows) || [];
     mk('rc-coord-src', {
       type: 'doughnut',
-      data: { labels: ['GPS','Addr Match','Census Geo'],
-        datasets: [{ data: [gpsCount, addrCount, geocodedCount],
-          backgroundColor: ['#10b981','#3b82f6','#8b5cf6'], borderWidth: 0 }] },
+      data: { labels: rows.map(r => r.label),
+        datasets: [{ data: rows.map(r => r.count),
+          backgroundColor: rows.map(r => r.color), borderWidth: 0 }] },
       options: { ...OPTS, cutout: '55%' },
     });
   }
