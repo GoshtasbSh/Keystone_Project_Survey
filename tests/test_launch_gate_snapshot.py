@@ -49,3 +49,34 @@ def test_new_rows_only_fail_for_test_accounts():
 def test_total_hash_is_order_independent():
     b = dict(ROW, id='f2')
     assert LS.total_hash([ROW, b]) == LS.total_hash([b, ROW])
+
+
+def _fake_snapshot(calls):
+    def snap(out):
+        calls.append(out)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / 'field_survey_points.json').write_text('[]')
+    return snap
+
+
+def test_existing_baseline_is_never_overwritten(tmp_path, monkeypatch, capsys):
+    # The before-snapshot is the only proof the real field points were never
+    # altered; the cron has already changed the blobs, so it cannot be redone.
+    calls = []
+    monkeypatch.setattr(LS, 'snapshot', _fake_snapshot(calls))
+    before = tmp_path / 'before'
+    assert LS.main(['--out', str(before)]) == 0
+    assert LS.main(['--out', str(before)]) == 2
+    assert 'already holds a snapshot' in capsys.readouterr().err
+    assert len(calls) == 1
+    assert LS.main(['--out', str(before), '--force']) == 0
+    assert len(calls) == 2
+
+
+def test_out_equal_to_compare_is_refused(tmp_path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(LS, 'snapshot', _fake_snapshot(calls))
+    d = tmp_path / 'after'
+    assert LS.main(['--out', str(d), '--compare', str(tmp_path / '.' / 'after'), '--force']) == 2
+    assert 'compare a snapshot with itself' in capsys.readouterr().err
+    assert calls == []

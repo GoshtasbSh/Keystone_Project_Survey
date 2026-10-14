@@ -17,6 +17,9 @@ Usage:
   .venv/bin/python scripts/audit/launch_snapshot.py --out "$GATE/after" \
       --compare "$GATE/before"
 
+An --out folder that already holds a snapshot is refused (exit 2) unless
+--force is given, and --out equal to --compare is always refused.
+
 The --out folder holds survey answers and addresses: keep it OUTSIDE the repo.
 """
 from __future__ import annotations
@@ -110,8 +113,21 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)
     ap.add_argument('--compare', default=None)
+    ap.add_argument('--force', action='store_true',
+                    help='overwrite an --out folder that already holds a snapshot')
     a = ap.parse_args(argv)
     out = Path(a.out)
+    # The before-snapshot is the binding evidence that the real field points
+    # were never altered, and its blob half cannot be re-taken once the cron
+    # has run: never overwrite it by accident, never compare it with itself.
+    if a.compare and out.resolve() == Path(a.compare).resolve():
+        print(f'refusing to compare a snapshot with itself: --out and --compare are both {out}',
+              file=sys.stderr)
+        return 2
+    if (out / 'field_survey_points.json').exists() and not a.force:
+        print(f'{out} already holds a snapshot; choose a new --out (or pass --force to '
+              f'overwrite it on purpose)', file=sys.stderr)
+        return 2
     snapshot(out)
     if not a.compare:
         return 0
