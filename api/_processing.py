@@ -1746,6 +1746,46 @@ def dedup_contacts_at_parcel(features: list, cell_deg: float = 1e-5) -> list:
     return out
 
 
+_CONTACT_IAQ_KEYS = (
+    'has_iaq_survey', 'iaq_overall_risk', 'iaq_risk_tier', 'iaq_health_score',
+    'iaq_iaq_score', 'iaq_struct_score', 'iaq_response_id',
+    'iaq_match_lon', 'iaq_match_lat',
+)
+
+
+def _reset_contact_iaq_links(contact_features: list) -> int:
+    """Undo every IAQ link a previous upload stamped on the contacts, so this
+    upload's matching is the single source of truth.
+
+    Without this a wrong link can never be removed: the contact blob is
+    re-read on every upload, and has_iaq_survey / iaq_response_id from an
+    older run survive even when the matcher (house-number check, latest
+    response per household) no longer links them. 6306 Amherst and 6376
+    Antioch kept a neighbour's survey this way.
+
+    The canvass status is re-derived from the contact's own
+    ``status_detail`` with ``categorize`` -- exactly what the contact
+    upload computed -- so a contact that is matched again below ends up
+    'Completed' as before, and one that is not goes back to its canvass
+    status. Contacts with no ``status_detail`` keep their status. Field
+    features are never touched. Returns the number of contacts reset.
+    """
+    n = 0
+    for cf in contact_features:
+        p = cf.get('properties') or {}
+        if p.get('source') == 'field' or p.get('field_point_id') is not None:
+            continue
+        if not (p.get('has_iaq_survey') or p.get('iaq_response_id')):
+            continue
+        for k in _CONTACT_IAQ_KEYS:
+            p.pop(k, None)
+        if 'status_detail' in p:
+            p['status'] = categorize(p.get('status_detail'))
+            p['color'] = STATUS.get(p['status'], STATUS['Unknown'])
+        n += 1
+    return n
+
+
 def _upgrade_contacts_from_iaq(survey_feats: list, iaq_features: list,
                                 matches: dict) -> int:
     upgraded = 0
@@ -2653,6 +2693,8 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
 
     # Match IAQ features → community contacts, upgrade statuses
     n_upgraded = 0
+    if contact_features:
+        _reset_contact_iaq_links(contact_features)
     if contact_features and features:
         matches = _match_iaq_to_contacts(features, contact_features)
         n_upgraded = _upgrade_contacts_from_iaq(contact_features, features, matches)

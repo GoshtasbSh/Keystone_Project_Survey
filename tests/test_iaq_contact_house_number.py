@@ -60,3 +60,41 @@ def test_contact_without_a_house_number_is_not_linked_by_coordinates():
     iaq = [_iaq('R_1', '6390 Bucknell Ave')]
     assert _match_iaq_to_contacts(iaq, contacts) == {}
     assert iaq[0]['properties']['match_review'] == 'house_number_mismatch'
+
+
+from _processing import (  # noqa: E402
+    STATUS, _reset_contact_iaq_links, _upgrade_contacts_from_iaq,
+)
+
+
+def test_reset_restores_the_canvass_status_and_drops_the_old_link():
+    c = _contact('6376 Antioch', status='Completed',
+                 status_detail='Come back after 4:00 pm; works nights ',
+                 color=STATUS['Completed'], has_iaq_survey=True,
+                 iaq_response_id='R_mT2CaA2cdWYOmij', iaq_overall_risk=37,
+                 iaq_risk_tier='Medium', iaq_health_score=0, iaq_iaq_score=64,
+                 iaq_struct_score=50, iaq_match_lon=-82.016571, iaq_match_lat=29.789677)
+    untouched = _contact('6300 Amherst Ave', status='Left Info', status_detail='left flier')
+    field = {'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': PT},
+             'properties': {'source': 'field', 'field_point_id': 'x', 'status': 'Completed',
+                            'has_iaq_survey': True, 'iaq_response_id': 'R_9'}}
+    n = _reset_contact_iaq_links([c, untouched, field])
+    assert n == 1
+    p = c['properties']
+    assert p['status'] == 'Follow Up' and p['color'] == STATUS['Follow Up']
+    for k in ('has_iaq_survey', 'iaq_response_id', 'iaq_overall_risk', 'iaq_match_lon'):
+        assert k not in p
+    assert untouched['properties']['status'] == 'Left Info'
+    assert field['properties']['iaq_response_id'] == 'R_9'   # field pins untouched
+
+
+def test_reset_then_rematch_gives_the_same_completed_contact():
+    c = _contact('6390 Bucknell Ave', status='Completed', status_detail='Completed survey',
+                 has_iaq_survey=True, iaq_response_id='R_old')
+    iaq = [_iaq('R_new', '6390 Bucknell Ave')]
+    _reset_contact_iaq_links([c])
+    m = _match_iaq_to_contacts(iaq, [c])
+    assert _upgrade_contacts_from_iaq([c], iaq, m) == 1
+    assert c['properties']['status'] == 'Completed'
+    assert c['properties']['iaq_response_id'] == 'R_new'
+    assert iaq[0]['properties']['iaq_matched'] is True
