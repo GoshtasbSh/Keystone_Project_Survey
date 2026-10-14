@@ -74,9 +74,13 @@ def test_october_typed_one_is_one_year(october):
 def test_october_years_stats(october):
     # GAP-10 RE-BASELINE: analysis-level numbers over the 106 households
     # (latest response each, MATCH-3). Before the dedup (114 placed
-    # responses) they read (110, 11.2, 7.5); the two bins below did not move.
+    # responses) they read (110, 11.2, 7.5); the '<1 yr' (8) and '1–4' (27)
+    # bins did not move.
     _, analysis = october
     y = analysis['residency']['years_in_hre']
     assert (y['n_valid'], y['mean'], y['median']) == (102, 10.9, 7.0)
-    assert y['distribution']['<1 yr'] == 8
-    assert y['distribution']['1–4'] == 27
+    # Every bin, read from the run and matched by the independent recompute
+    # (VER-2 semantics, latest per household); the bins sum to n_valid.
+    assert y['distribution'] == {'<1 yr': 8, '1–4': 27, '5–9': 24,
+                                 '10–19': 23, '20–29': 11, '30+': 9}
+    assert sum(y['distribution'].values()) == y['n_valid']
