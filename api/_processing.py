@@ -1339,6 +1339,67 @@ def _house_number(addr) -> str:
         return parsed[0]
 
 
+def _household_key(feature: dict):
+    """(lon, lat, house_number) at 1e-6 deg, or None when the response has
+    no house number (never grouped: two such rows may be different homes)."""
+    p = feature.get('properties') or {}
+    h = str(p.get('house_number') or '')
+    if not h:
+        return None
+    lon, lat = feature['geometry']['coordinates'][:2]
+    return (round(float(lon), 6), round(float(lat), 6), h)
+
+
+def _supersede_repeat_households(features: list) -> tuple:
+    """Keep ONLY the latest response (by RecordedDate) per household.
+
+    A household is one parcel point plus one typed house number. Earlier
+    responses from the same household are returned separately, flagged
+    ``superseded=True`` / ``superseded_by=<kept id>``, so they stay in the
+    stored data but are excluded from every statistic and are not drawn.
+    The kept response records ``household_responses`` (how many times the
+    household answered) and ``superseded_response_ids``.
+
+    RecordedDate is Qualtrics' 'YYYY-MM-DD HH:MM:SS', so string order is
+    time order. Ties (and blank dates) fall back to CSV row order: the
+    later row wins. One pass to group, sorting only within the (tiny)
+    groups. Returns (kept, superseded); kept keeps the CSV order of the
+    surviving rows.
+    """
+    groups: dict = {}
+    for i, f in enumerate(features):
+        k = _household_key(f)
+        if k is not None:
+            groups.setdefault(k, []).append(i)
+    drop: dict = {}
+    for idxs in groups.values():
+        if len(idxs) < 2:
+            continue
+        ordered = sorted(idxs, key=lambda i: (
+            str(features[i]['properties'].get('recorded_date') or ''), i))
+        keep_i = ordered[-1]
+        kp = features[keep_i]['properties']
+        kept_id = kp.get('response_id', '')
+        earlier = ordered[:-1]
+        kp['household_responses'] = len(idxs)
+        kp['superseded_response_ids'] = [
+            features[i]['properties'].get('response_id', '') for i in earlier]
+        for i in earlier:
+            drop[i] = kept_id
+    kept, superseded = [], []
+    for i, f in enumerate(features):
+        if i in drop:
+            p = f['properties']
+            p['superseded'] = True
+            p['superseded_by'] = drop[i]
+            p['iaq_matched'] = False
+            p['match_status'] = 'superseded'
+            superseded.append(f)
+        else:
+            kept.append(f)
+    return kept, superseded
+
+
 def _build_contact_lookup(contact_features: list) -> dict:
     lookup = {}
     for f in contact_features:
@@ -2686,10 +2747,20 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
                 'coord_source':       coord_source,
                 'response_id':        str(_row_nr.get('ResponseId', '') or _row_nr.get('Response ID', '') or ''),
                 'raw_address':        raw_addr,
+                'house_number':       _house_number(raw_addr),
+                'recorded_date':      str(_row_nr.get('RecordedDate', '') or ''),
                 'iaq_matched':        False,
                 **survey_extras,
             },
         })
+
+    # One household, one response: keep only the latest submission per
+    # household (parcel point + typed house number). The earlier ones stay
+    # in the stored data (geojson['superseded_features']) but are not drawn,
+    # matched or counted. Must run BEFORE matching so the kept response is
+    # the one that claims the contact.
+    n_mapped_responses = len(features)
+    features, superseded = _supersede_repeat_households(features)
 
     # Match IAQ features → community contacts, upgrade statuses
     n_upgraded = 0
@@ -2724,6 +2795,9 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
     # Strip PII (raw_address) before returning / persisting
     for f in features:
         f['properties'].pop('raw_address', None)
+    for f in superseded:
+        f['properties'].pop('raw_address', None)
+        f['properties'].pop('years_in_hre_num', None)
 
     # Per-respondent SURVEY_QUESTIONS answers are RETAINED on each IAQ feature
     # so the dashboard's contact-point popup can render a "Survey Answers" tab
@@ -2746,10 +2820,22 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
     analysis['validation']['completed_in_csv']    = int(len(df_full))
     analysis['validation']['excluded_test_responses'] = len(excluded_test_ids)
     analysis['validation']['excluded_test_ids']   = excluded_test_ids[:25]
-    analysis['validation']['dropped_no_geocode']  = int(len(df_full) - len(features))
+    analysis['validation']['dropped_no_geocode']  = int(len(df_full) - n_mapped_responses)
     analysis['validation']['dropped_addresses']   = [str(a)[:120] for a in failed_geocodes[:25]]
     analysis['validation']['charted_pct_of_completed'] = (
-        round(len(features) / len(df_full) * 100, 1) if len(df_full) else 0.0)
+        round(n_mapped_responses / len(df_full) * 100, 1) if len(df_full) else 0.0)
+    # Responses vs households. Every chart and percentage is computed over
+    # the households (latest response each); the earlier repeat responses
+    # are listed so the denominator is never implied.
+    analysis['validation']['responses_mapped']   = int(n_mapped_responses)
+    analysis['validation']['households_mapped']  = int(len(features))
+    analysis['validation']['repeat_responses_excluded'] = int(len(superseded))
+    analysis['validation']['superseded_responses'] = [
+        {'response_id': f['properties'].get('response_id', ''),
+         'superseded_by': f['properties'].get('superseded_by', '')}
+        for f in superseded]
+    analysis['n_households'] = int(len(features))
+    analysis['n_responses_mapped'] = int(n_mapped_responses)
     print(f"[iaq-debug] pct_want sample: { {k: v for k, v in (analysis.get('interventions') or {}).get('pct_want', {}).items()} }")
     print(f"[iaq-debug] pct_yes sample:  { {k: v for k, v in (analysis.get('experiences') or {}).get('pct_yes', {}).items()} }")
     # Store QID map summary in analysis for dashboard-visible diagnostics
@@ -2764,7 +2850,8 @@ def process_iaq_bytes(csv_bytes: bytes, contact_features: list,
     analysis['_qid_fallback_count'] = len(qid_miss_log)
     for f in features:
         f['properties'].pop('years_in_hre_num', None)
-    geojson = {'type': 'FeatureCollection', 'features': features}
+    geojson = {'type': 'FeatureCollection', 'features': features,
+               'superseded_features': superseded}
     if missing_columns:
         analysis['validation_warnings'] = {
             'missing_columns': missing_columns,

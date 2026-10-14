@@ -181,6 +181,13 @@ def _upgrade_field_points_iaq_matched(sb, upgraded_ids: list) -> None:
         print(f"[upload/iaq] bulk field-point upgrade failed n={len(upgraded_ids)}: {e}")
 
 
+def _all_iaq_features(geojson) -> list:
+    """Every stored response: drawn features plus the superseded (earlier
+    repeat) responses kept alongside them. Used by the upload safety guard."""
+    g = geojson if isinstance(geojson, dict) else {}
+    return list(g.get('features') or []) + list(g.get('superseded_features') or [])
+
+
 def _is_field_feature(f: dict) -> bool:
     p = (f or {}).get('properties') or {}
     return p.get('source') == 'field' or p.get('field_point_id') is not None

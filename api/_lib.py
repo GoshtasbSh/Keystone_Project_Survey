@@ -139,6 +139,11 @@ SURVEY_ANSWER_FIELDS = (
     'ownership_other', 'reloc_factor_oth_text', 'housing_type_other',
     'afford_strategy_other', 'cooking_other', 'mold_other',
     'hurricane_transport_other',
+    # Matching aids (2026-10): the typed house number plus the parcel point
+    # is the full home address, the submit time identifies the respondent
+    # more than the public map needs, and the review note quotes both
+    # house numbers.
+    'house_number', 'recorded_date', 'match_review_note',
 )
 
 
@@ -150,7 +155,7 @@ def strip_survey_answers(geojson):
         return geojson
     feats_in = geojson.get('features') or []
     if not isinstance(feats_in, list):
-        return geojson
+        return {k: v for k, v in geojson.items() if k != 'superseded_features'}
     feats_out = []
     keys = SURVEY_ANSWER_FIELDS
     for f in feats_in:
@@ -161,7 +166,11 @@ def strip_survey_answers(geojson):
             feats_out.append(f); continue
         new_props = {k: v for k, v in props.items() if k not in keys}
         feats_out.append({**f, 'properties': new_props})
-    return {**geojson, 'features': feats_out}
+    # Superseded (earlier repeat) responses carry full answers and are
+    # never drawn, so the public path does not get them at all.
+    out = {k: v for k, v in geojson.items() if k != 'superseded_features'}
+    out['features'] = feats_out
+    return out
 
 
 def _bearer_jwt(handler) -> str | None:
