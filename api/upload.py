@@ -12,7 +12,7 @@ plan's 12-function ceiling. Behavior per branch is unchanged:
                   table mirror so the mobile field app stays in sync.
                   Refuses a file with no Address column or 0 placeable
                   contacts, and a large drop unless ?force=1.
-  ?type=results — Generic survey results CSV/Excel. PII_COLS stripped before
+  ?type=results — Generic survey results CSV/Excel. RESULTS_PII_COLS stripped before
                   persisting under data_type='survey_results'.
 
 Auth: admin role required (require_admin) for every branch — uploads
@@ -35,7 +35,7 @@ from _processing import (
     parse_multipart_file, load_parcel_index,
     process_iaq_bytes, process_survey_bytes, compute_contact_analysis,
     _apply_iaq_to_field_features, tag_contact_match_status,
-    dedup_contacts_at_parcel, PII_COLS, _build_validation_summary,
+    dedup_contacts_at_parcel, RESULTS_PII_COLS, _build_validation_summary,
 )
 from _field_layer import (
     FIELD_COLS_BASE as _FIELD_COLS_BASE,
@@ -726,7 +726,7 @@ class handler(BaseHTTPRequestHandler):
         except Exception as e:
             return json_response(self, 400, {'detail': f'Could not parse file: {e}'})
 
-        pii = [c for c in PII_COLS if c in df.columns]
+        pii = [c for c in RESULTS_PII_COLS if c in df.columns]
         if pii:
             df = df.drop(columns=pii)
 

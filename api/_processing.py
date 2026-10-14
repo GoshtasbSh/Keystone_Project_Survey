@@ -68,6 +68,17 @@ PII_COLS = {
     'Q_RelevantIDFraudScore', 'Q_RelevantIDLastStartDate', 'Q_DuplicateRespondent',
 }
 
+# Columns stripped before /api/upload?type=results stores a generic results
+# file. A SUPERSET of PII_COLS: it also removes the typed home address
+# (Q212), the device GPS fix and the QID155 contact block (name / email /
+# phone, exported as 'Participation IAQ_1/_2/_6'). Deliberately NOT merged
+# into PII_COLS — process_iaq_bytes drops PII_COLS from `df` and then reads
+# Q212 from that same frame to place every response (audit 2026-10-13 F13).
+RESULTS_PII_COLS = frozenset(PII_COLS | {
+    'Q212', 'LocationLatitude', 'LocationLongitude',
+    'Participation IAQ_1', 'Participation IAQ_2', 'Participation IAQ_6',
+})
+
 KH_LAT_MIN, KH_LAT_MAX = 29.60, 29.95
 KH_LON_MIN, KH_LON_MAX = -82.20, -81.75
 
@@ -756,7 +767,11 @@ class ParcelIndex:
                     best_pos = (c_lon, c_lat)
             if best_score >= 0.75 and best_pos:
                 return best_pos[0], best_pos[1], addr, 'parcel_fuzzy'
-        # 3 & 4. Census geocoding + optional parcel snap
+        # 3 & 4. Census geocoding + optional parcel snap — only for text that
+        # can be an address. An email or a sentence ("I guess my land lord
+        # is …") must never leave the building (audit 2026-10-13 F11).
+        if not _looks_like_street_address(addr):
+            return None, None, None, 'failed'
         lon, lat, matched = _census_geocode(addr)
         if lon is not None:
             snapped = self.snap(lon, lat)
@@ -786,6 +801,17 @@ def load_parcel_index() -> ParcelIndex:
 
 # ── Census geocoding (replaces requests.get in app.py) ────────────────────────
 
+def _looks_like_street_address(addr) -> bool:
+    """True when `addr` has the 'house-number street' shape the parcel
+    matcher needs (whitespace runs, incl. newlines, collapsed first) and
+    contains no '@'. Every stored contact address and every placed
+    response passes; the 2026-10 export's email and landlord sentence fail."""
+    text = ' '.join(str(addr or '').split())
+    if not text or '@' in text:
+        return False
+    return _parse_addr_parts(text) is not None
+
+
 def _census_geocode(addr: str) -> tuple:
     """Census Bureau geocoding API via urllib (no external packages)."""
     full = re.sub(r'\s+', ' ', addr.strip()) + ', Keystone Heights, FL'
@@ -801,8 +827,10 @@ def _census_geocode(addr: str) -> tuple:
         if ms:
             c = ms[0]['coordinates']
             return float(c['x']), float(c['y']), ms[0]['matchedAddress']
-    except Exception:
-        pass
+    except Exception as e:
+        # Logged separately so a Census outage is not mistaken for
+        # "address not found" when reading the upload logs.
+        print(f"[census] request failed ({type(e).__name__}: {e})")
     return None, None, None
 
 
@@ -1191,10 +1219,18 @@ def _extract_survey_extras(full_row, qid_to_col_idx: dict | None = None,
             # Tertiary: header-text fallback (text-format exports).
             col = cmap.get(qid) or cmap.get(qid[:-5] if qid.endswith('_TEXT') else qid)
         if col is None:
-            # Final fallback to the historical hardcoded column index.
-            col = idx
             if miss_log is not None and qid:
                 miss_log.append(qid)
+            if qmap or cmap:
+                # The export carries QID metadata but not this question:
+                # it was removed or renamed. Reading the hardcoded position
+                # would silently return a NEIGHBOURING question's answer
+                # (October 2026 shifted 127 columns by +2 — audit F12), so
+                # report it as unanswered and let _qid_fallback_qids flag it.
+                out[field] = ''
+                continue
+            # Legacy export with no QID metadata at all: positional read.
+            col = idx
         out[field] = _val_at_orig_idx(full_row, col)
     out['years_in_hre_num'] = _parse_years_numeric(out.get('years_in_hre'))
     return out
