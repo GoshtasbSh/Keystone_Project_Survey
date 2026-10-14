@@ -1121,6 +1121,8 @@ def _val_at_orig_idx(full_row, orig_idx):
 # A leading number, an optional unit word, then end / space / ',' / '+' / '.'.
 # '6/25' (a date) and 'Last month' (no number) do not match: never guessed.
 _YEARS_RE = re.compile(r'^(\d+(?:\.\d+)?|\.\d+)\s*([a-z]*)(?:[\s,+.]|$)')
+_YEARS_FRACTION_RE = re.compile(r'\s*\d+\s*/\s*\d+')   # '2 1/2 years': not guessed
+_YEARS_MAX = 100     # above this the figure is a calendar year ('since 1990'), not a duration
 
 
 def _parse_years_numeric(v):
@@ -1129,8 +1131,10 @@ def _parse_years_numeric(v):
     Accepts '10', '10 years', '10 yrs', '1yr', '7 y', '30 yeads' (typo),
     '5.5', '.5', '10+', '12 yrs, family home for 20' (the leading figure is
     the answer). Month answers — '5 months', '5months', '2mo', '3 mo' — are
-    converted to years (n / 12). Returns None when there is no leading number
-    or the unit is not a year/month word.
+    converted to years (n / 12). Returns None when there is no leading number,
+    the unit is not a year/month word, the number is followed by a fraction
+    ('2 1/2 years'), or the result is over 100 years (a bare calendar year
+    such as '1990' or '2005'): such answers are never guessed.
     """
     if v is None:
         return None
@@ -1144,12 +1148,16 @@ def _parse_years_numeric(v):
         n = float(m.group(1))
     except (ValueError, TypeError):
         return None
+    if _YEARS_FRACTION_RE.match(s, m.end(1)):
+        return None
     unit = m.group(2)
     if unit.startswith('mo'):
-        return round(n / 12.0, 4)
-    if unit == '' or unit.startswith('y'):
-        return n
-    return None
+        years = round(n / 12.0, 4)
+    elif unit == '' or unit.startswith('y'):
+        years = n
+    else:
+        return None
+    return years if years <= _YEARS_MAX else None
 
 
 def _build_colname_qid_map(df_columns) -> dict:

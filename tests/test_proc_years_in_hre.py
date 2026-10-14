@@ -78,3 +78,16 @@ def test_october_years_stats(october):
     assert y['distribution'] == {'<1 yr': 8, '1–4': 27, '5–9': 24,
                                  '10–19': 23, '20–29': 11, '30+': 9}
     assert sum(y['distribution'].values()) == y['n_valid']
+
+
+def test_calendar_years_and_fractions_are_not_guessed():
+    # A bare calendar year is a "since" year, not 1990 years; one such answer
+    # would add ~19 years to the published mean. A trailing fraction would
+    # silently drop to its whole part. Neither is guessed.
+    for typed in ('1990', '2005', '2005 years', '150', '1990 yrs'):
+        assert _parse_years_numeric(typed) is None, typed
+    for typed in ('2 1/2 years', '5 1/2', '1/2 year', '3 1/2yrs'):
+        assert _parse_years_numeric(typed) is None, typed
+    assert _parse_years_numeric('100') == 100
+    assert _parse_years_numeric('120 months') == 10
+    assert _parse_years_numeric('2.5 years') == 2.5
