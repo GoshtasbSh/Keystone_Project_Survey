@@ -54,3 +54,13 @@ tests/
 # must NOT be listed — Vercel installs the Python deps from it.
 /*.md
 /.env.example
+
+# Local data that must never be uploaded by a CLI deploy (`vercel deploy`
+# uploads the working tree, not git, and .gitignore does not apply here):
+# runbook backups (scripts/prod_runbook.py backup — full contact list),
+# hand-over exports, and screenshots of the signed-in dashboard dropped at
+# the repo root. Nothing deployed references a root-level .png.
+/backups/
+/exports/
+/*.png
+.venv/

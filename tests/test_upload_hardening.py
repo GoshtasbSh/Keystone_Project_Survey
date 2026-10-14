@@ -119,10 +119,18 @@ class VercelIgnoreTests(unittest.TestCase):
                   "KeyStone_Project_Resume_Dossier.md", ".env.example"):
             self.assertTrue(self._ignored(f), f)
 
+    def test_local_data_and_screenshots_are_ignored(self):
+        # scripts/prod_runbook.py backups and hand-over exports hold the
+        # full contact list; a CLI deploy uploads the working tree.
+        for f in ("backups/2026-10-20-prelaunch/community_contacts.json",
+                  "exports/shimberg_2026-10-02/contacts.csv", "dash-member.png",
+                  "audit-05-admin-dashboard.png", ".venv/lib/site.py"):
+            self.assertTrue(self._ignored(f), f)
+
     def test_runtime_files_are_not_ignored(self):
         for f in ("requirements.txt", "vercel.json", "api/upload.py",
                   "static/js/dashboard.js", "static/index.html",
-                  "keystone_field_web/index.html"):
+                  "keystone_field_web/index.html", "static/img/logo.png"):
             self.assertFalse(self._ignored(f), f)
 
 
