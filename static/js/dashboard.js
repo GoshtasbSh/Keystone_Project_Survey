@@ -1362,7 +1362,8 @@ async function renderDataSummary() {
   try {
     const { data, error } = await sbClient
       .from('keystone_dashboard_data')
-      .select('data_type, payload, updated_at');
+      .select('data_type, payload, updated_at')
+      .in('data_type', Object.keys(cards));
     if (error) throw error;
     const byType = Object.fromEntries((data || []).map(r => [r.data_type, r]));
     for (const [key, c] of Object.entries(cards)) {
