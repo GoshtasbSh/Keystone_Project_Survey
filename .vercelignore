@@ -64,3 +64,12 @@ tests/
 /exports/
 /*.png
 .venv/
+
+# Also local-only and gitignored, but .gitignore does not apply to a CLI
+# deploy: verify/ holds local IAQ geojson with every response's health and
+# housing answers at exact coordinates (what anonymous /api/iaq-points
+# strips); .superpowers/ holds workflow briefs and review notes that name
+# residents and give household addresses. Neither is referenced at runtime.
+/verify/
+/.superpowers/
+.pytest_cache/

@@ -124,7 +124,12 @@ class VercelIgnoreTests(unittest.TestCase):
         # full contact list; a CLI deploy uploads the working tree.
         for f in ("backups/2026-10-20-prelaunch/community_contacts.json",
                   "exports/shimberg_2026-10-02/contacts.csv", "dash-member.png",
-                  "audit-05-admin-dashboard.png", ".venv/lib/site.py"):
+                  "audit-05-admin-dashboard.png", ".venv/lib/site.py",
+                  # local IAQ geojson with health answers at exact points
+                  "verify/after-may-local-geojson.json", "verify/before-iaq.json",
+                  # workflow briefs/notes naming residents and addresses
+                  ".superpowers/sdd/x/task-UP-11-brief.md",
+                  ".pytest_cache/v/cache/lastfailed"):
             self.assertTrue(self._ignored(f), f)
 
     def test_runtime_files_are_not_ignored(self):
