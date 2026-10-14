@@ -1876,92 +1876,203 @@ def _upgrade_contacts_from_iaq(survey_feats: list, iaq_features: list,
     return upgraded
 
 
+_FIELD_IAQ_KEYS = (
+    'has_iaq_survey', 'iaq_overall_risk', 'iaq_risk_tier', 'iaq_health_score',
+    'iaq_iaq_score', 'iaq_struct_score', 'iaq_response_id',
+    'iaq_match_lon', 'iaq_match_lat',
+)
+# Phone numbers first, so '352-555-1234' never yields a '1234' house number.
+_PHONE_RE = re.compile(r'\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]\d{4}\b')
+_NOTE_HOUSE_RE = re.compile(r'(?<![\d.,/-])(\d{3,5})(?![\d.,/-])\s*([A-Za-z]+)?')
+
+
+def _note_house_numbers(notes) -> list:
+    """[(house_number, following_word_lower_or_''), ...] named in a field note.
+
+    '6280 survey completed previously' -> [('6280', 'survey')]
+    'Previously done in qualtrics 6414 Baylor' -> [('6414', 'baylor')]
+    """
+    if not notes:
+        return []
+    text = _PHONE_RE.sub(' ', str(notes))
+    out = []
+    for m in _NOTE_HOUSE_RE.finditer(text):
+        out.append((str(int(m.group(1))), (m.group(2) or '').lower()))
+    return out
+
+
+def field_iaq_signature(ff: dict) -> tuple:
+    """The IAQ-derived fields on a field feature, for change detection."""
+    p = ff.get('properties') or {}
+    return (p.get('status'),) + tuple(p.get(k) for k in _FIELD_IAQ_KEYS)
+
+
+_M_PER_DEG_LAT = 6_371_000 * 3.141592653589793 / 180   # same R as haversine
+
+
+def _deg_window(lat: float, radius_m: float) -> tuple:
+    """(max |dlat|, max |dlon|) in degrees outside which a point is surely
+    farther than ``radius_m`` from latitude ``lat``. Generous (+1 m, +2 %)
+    so it only skips the haversine call, never changes a result."""
+    r = radius_m + 1.0
+    dlat = r / _M_PER_DEG_LAT
+    c = cos(radians(lat))
+    dlon = (r * 1.02) / (_M_PER_DEG_LAT * c) if c > 1e-6 else 360.0
+    return dlat, dlon
+
+
+def _street_first_words(iaq_features: list) -> tuple:
+    """({id(iaq_f): first word of its street core}, {all such words}).
+
+    _street_core runs difflib, so it is called once per distinct
+    street_name string, not once per response."""
+    by_name: dict = {}
+    first_of: dict = {}
+    known: set = set()
+    for iaq_f in iaq_features:
+        name = str(iaq_f['properties'].get('street_name') or '')
+        first = by_name.get(name)
+        if first is None:
+            core = _street_core(name)
+            first = core.split()[0] if core else ''
+            by_name[name] = first
+        first_of[id(iaq_f)] = first
+        if first:
+            known.add(first)
+    return first_of, known
+
+
 def _apply_iaq_to_field_features(field_features: list, iaq_features: list,
                                   parcel_idx: "ParcelIndex | None" = None,
-                                  fallback_m: float = 30) -> int:
+                                  fallback_m: float = 30,
+                                  note_radius_m: float = 60) -> int:
     """
-    Upgrade field survey point status to Completed when an IAQ survey
-    exists for the same parcel.
+    Link each field pin to the Qualtrics response for the same house and
+    copy that response's CURRENT scores onto the pin.
 
-    v3 algorithm (2026-05-05) — parcel-centred, GPS-aware:
+    Tiers, first hit wins:
 
-      1. **Same-parcel match (preferred):** snap the field pin's
-         door-GPS to its parcel rep-point via parcel_idx.snap(). Look
-         up an IAQ feature whose coords equal that rep-point (within
-         1 m). Same parcel = same household.
+      1. **House number in the pin's notes (<= ``note_radius_m``, 60 m).**
+         Canvassers write '6280 survey completed previously on qualtrics'.
+         A response whose typed house number equals a number in the note
+         is linked, nearest first. If the word after the number names a
+         street that some response is on, the response must be on that
+         street ('6414 Baylor' never links a 6414 on another street).
+      2. **Same parcel:** snap the pin's GPS to its parcel rep-point and
+         take the response on that point (<= 1 m).
+      3. **Nearest response within ``fallback_m`` (30 m)**, distances
+         compared at 0.1 m (GPS precision), so a pin 30.009 m away is in.
+         Previously this took the FIRST response within 30 m, which at a
+         repeat-response parcel was an arbitrary one.
 
-      2. **Distance fallback (`fallback_m`, default 30 m):** when a
-         parcel index isn't provided OR the field pin is outside any
-         parcel (curb-side reading, GPS error). Conservative threshold
-         — 30 m ≈ one suburban lot frontage, won't cross property
-         lines in normal cases.
+    Every matched pin gets the response's current scores, so a re-upload
+    refreshes stale copies. A pin whose stored ``iaq_response_id`` is no
+    longer among ``iaq_features`` (response removed or superseded) and
+    that matches nothing now has its IAQ fields cleared; its status is
+    left as the surveyor set it.
 
-    Returns the count of field points upgraded.
+    Mutates each matched IAQ feature's ``iaq_matched`` in place (callers
+    persist the iaq_survey blob from this same list). Returns the number
+    of pins that were not enriched before this call and are now.
     """
     if not iaq_features:
         return 0
     # IMPORTANT: we mutate each matched IAQ feature's properties.iaq_matched
-    # in place below. The caller (daily-refresh.py) re-reads that flag from
-    # THIS SAME list to decide whether to persist the iaq_survey blob, so we
-    # must NOT deep-copy here — doing so would discard the flips and the
-    # 'matched' (white-rim) state would never persist. Each serverless
-    # invocation already deserializes its own list from the DB blob, so
+    # in place below. Callers (upload.py, daily-refresh.py) re-read that
+    # flag from THIS SAME list, so we must NOT deep-copy here. Each
+    # serverless invocation deserializes its own list from the DB blob, so
     # there is no shared/cross-request object to race on.
+    live_ids = set()
+    houses: dict = {}           # house_number -> [(lon, lat, iaq_f), ...]
+    pts = []                    # [(lon, lat, iaq_f), ...] in list order
+    for iaq_f in iaq_features:
+        ip = iaq_f['properties']
+        rid = ip.get('response_id')
+        if rid:
+            live_ids.add(rid)
+        i_lon, i_lat = iaq_f['geometry']['coordinates']
+        pt = (i_lon, i_lat, iaq_f)
+        pts.append(pt)
+        h = str(ip.get('house_number') or '')
+        if h:
+            houses.setdefault(h, []).append(pt)
+    # Street first-words are only needed when a note names a house number
+    # that some response has AND a word follows it; built once, on demand.
+    street_first = None         # id(iaq_f) -> first word of street core
+    known_cores = None
+
     upgraded = 0
     for ff in field_features:
-        # NB: previously this loop skipped points whose status was already
-        # 'Completed' — that meant a user-saved mobile pin marked Completed
-        # by the surveyor never picked up the matching Qualtric survey, so
-        # has_iaq_survey stayed false and the popup rendered contact_only
-        # (yellow rim) with no Survey-Answers tab. We now process every
-        # field point: status is preserved if it's already Completed,
-        # but the IAQ enrichment fields + has_iaq_survey + iaq_matched
-        # flag on the IAQ feature are always written when a match exists.
-        already_enriched = bool(ff['properties'].get('has_iaq_survey'))
+        props = ff['properties']
+        already_enriched = bool(props.get('has_iaq_survey'))
         f_lon, f_lat = ff['geometry']['coordinates']
         match_iaq = None
 
-        # Tier 1: parcel-snap the field pin, look up matching IAQ.
-        if parcel_idx is not None:
+        # Tier 1: house number written in the notes.
+        if houses:
+            best_d = None
+            for num, word in _note_house_numbers(props.get('notes')):
+                cands = houses.get(num)
+                if not cands:
+                    continue
+                if word and street_first is None:
+                    street_first, known_cores = _street_first_words(iaq_features)
+                for i_lon, i_lat, iaq_f in cands:
+                    if (word and word in known_cores
+                            and word != street_first.get(id(iaq_f), '')):
+                        continue  # note names a different known street
+                    d = _haversine_m(f_lat, f_lon, i_lat, i_lon)
+                    if d <= note_radius_m and (best_d is None or d < best_d):
+                        best_d, match_iaq = d, iaq_f
+
+        # Tier 2: parcel-snap the field pin, take the response on that
+        # parcel's rep-point (<= 1 m).
+        if match_iaq is None and parcel_idx is not None:
             f_parcel = parcel_idx.parcel_rep_point(f_lon, f_lat, max_dist_m=50)
             if f_parcel is not None:
                 p_lon, p_lat = f_parcel
-                for iaq_f in iaq_features:
-                    i_lon, i_lat = iaq_f['geometry']['coordinates']
+                dlat_max, dlon_max = _deg_window(p_lat, 1.0)
+                for i_lon, i_lat, iaq_f in pts:
+                    if abs(i_lat - p_lat) > dlat_max or abs(i_lon - p_lon) > dlon_max:
+                        continue  # cheap exact-safe reject before haversine
                     if _haversine_m(p_lat, p_lon, i_lat, i_lon) <= 1.0:
                         match_iaq = iaq_f
                         break
 
-        # Tier 2: conservative distance fallback (no parcel context).
+        # Tier 3: nearest response within fallback_m, compared at 0.1 m.
         if match_iaq is None:
-            for iaq_f in iaq_features:
-                i_lon, i_lat = iaq_f['geometry']['coordinates']
-                if _haversine_m(f_lat, f_lon, i_lat, i_lon) <= fallback_m:
-                    match_iaq = iaq_f
-                    break
+            best_d = None
+            dlat_max, dlon_max = _deg_window(f_lat, fallback_m)
+            for i_lon, i_lat, iaq_f in pts:
+                if abs(i_lat - f_lat) > dlat_max or abs(i_lon - f_lon) > dlon_max:
+                    continue
+                d = round(_haversine_m(f_lat, f_lon, i_lat, i_lon), 1)
+                if d <= fallback_m and (best_d is None or d < best_d):
+                    best_d, match_iaq = d, iaq_f
 
         if match_iaq is not None:
             ip = match_iaq['properties']
             ig = match_iaq['geometry']['coordinates']
-            ff['properties']['status']           = 'Completed'
-            ff['properties']['color']            = STATUS['Completed']
-            ff['properties']['has_iaq_survey']   = True
-            ff['properties']['iaq_overall_risk'] = ip.get('overall_risk', 0)
-            ff['properties']['iaq_risk_tier']    = ip.get('risk_tier', '')
-            ff['properties']['iaq_health_score'] = ip.get('health_score', 0)
-            ff['properties']['iaq_iaq_score']    = ip.get('iaq_score', 0)
-            ff['properties']['iaq_struct_score'] = ip.get('struct_score', 0)
-            ff['properties']['iaq_response_id']  = ip.get('response_id', '')
-            ff['properties']['iaq_match_lon']    = ig[0]
-            ff['properties']['iaq_match_lat']    = ig[1]
+            props['status']           = 'Completed'
+            props['color']            = STATUS['Completed']
+            props['has_iaq_survey']   = True
+            props['iaq_overall_risk'] = ip.get('overall_risk', 0)
+            props['iaq_risk_tier']    = ip.get('risk_tier', '')
+            props['iaq_health_score'] = ip.get('health_score', 0)
+            props['iaq_iaq_score']    = ip.get('iaq_score', 0)
+            props['iaq_struct_score'] = ip.get('struct_score', 0)
+            props['iaq_response_id']  = ip.get('response_id', '')
+            props['iaq_match_lon']    = ig[0]
+            props['iaq_match_lat']    = ig[1]
             # Flip the IAQ feature itself so the iaq layer can re-classify
-            # this dot from 'iaq_only' (yellow rim) to 'matched' (white
-            # rim). Mirrors what _upgrade_contacts_from_iaq does on the
-            # CSV-contacts side. Caller is responsible for persisting the
-            # iaq_survey blob if it relies on this flag.
-            match_iaq['properties']['iaq_matched'] = True
+            # this dot from 'iaq_only' to 'matched'. The orphan rule in the
+            # dashboard still keeps a no-address response purple.
+            ip['iaq_matched'] = True
             if not already_enriched:
                 upgraded += 1
+        elif already_enriched and props.get('iaq_response_id') not in live_ids:
+            for k in _FIELD_IAQ_KEYS:
+                props.pop(k, None)
     return upgraded
 
 
