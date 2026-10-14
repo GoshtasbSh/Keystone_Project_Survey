@@ -59,7 +59,7 @@ def sql():
         " lat double precision not null, lon double precision not null, status text,"
         " collector_name text, collected_at timestamptz not null default now());")
     for name in ("29_atomic_dashboard_writes.sql", "30_field_pin_delete_prunes_blob.sql"):
-        if (MIG / name).exists():               # 30 arrives in a later task (UP-7)
+        if (MIG / name).exists():
             run((MIG / name).read_text())
             run((MIG / name).read_text())       # idempotent: safe to re-run
     yield run
@@ -117,3 +117,50 @@ def test_rpc_is_not_callable_by_anon_or_authenticated(sql):
     for role in ("anon", "authenticated"):
         r = sql(f"set role {role}; select keystone_commit_blobs('[]','[]','{{}}')", ok=False)
         assert r.returncode != 0 and "permission denied" in r.stderr
+
+
+def test_deleting_a_pin_prunes_only_that_pin(sql):
+    sql(f"insert into field_survey_points(id,lat,lon,status,collector_name) values "
+        f"('{PIN_A}',29.7,-82.0,'Completed','test_a'),('{PIN_B}',29.7,-82.0,'Completed','test_b'),"
+        f"('{PIN_C}',29.7,-82.0,'Completed','Carey Morford')")
+    blob = ('{"type":"FeatureCollection","features":['
+            '{"type":"Feature","geometry":{"type":"Point","coordinates":[-82,29.7]},'
+            '"properties":{"address":"1 A St","status":"Completed"}},'
+            f'{{"type":"Feature","geometry":{{"type":"Point","coordinates":[-82,29.7]}},'
+            f'"properties":{{"source":"field","field_point_id":"{PIN_A}"}}}},'
+            f'{{"type":"Feature","geometry":{{"type":"Point","coordinates":[-82,29.7]}},'
+            f'"properties":{{"source":"field","field_point_id":"{PIN_B}",'
+            f'"coincident_contacts":[{{"source":null,"status":"Left Info"}}]}}}},'
+            f'{{"type":"Feature","geometry":{{"type":"Point","coordinates":[-82,29.7]}},'
+            f'"properties":{{"source":"field","field_point_id":"{PIN_C}"}}}}]}}')
+    sql(f"update keystone_dashboard_data set payload = '{blob}'::jsonb where data_type='community_contact'")
+    sql(f"delete from field_survey_points where id in ('{PIN_A}','{PIN_B}')")
+    ids = sql("select string_agg(coalesce(f->'properties'->>'field_point_id', f->'properties'->>'address'), ',' order by o) "
+              "from keystone_dashboard_data, jsonb_array_elements(payload->'features') with ordinality as t(f,o) "
+              "where data_type='community_contact'")
+    # contact kept, A pruned, B kept (holds a swallowed contact), C untouched
+    assert ids == f"1 A St,{PIN_B},{PIN_C}"
+
+
+def test_deleting_an_unknown_pin_is_a_no_op(sql):
+    before = _stamp(sql, "community_contact")
+    sql("delete from field_survey_points where id = '99999999-9999-9999-9999-999999999999'")
+    assert _stamp(sql, "community_contact") == before
+
+
+def test_a_malformed_blob_never_blocks_a_pin_delete(sql):
+    pin = "44444444-4444-4444-4444-444444444444"
+    sql(f"insert into field_survey_points(id,lat,lon,status,collector_name) values "
+        f"('{pin}',29.7,-82.0,'Completed','test_d')")
+    sql("update keystone_dashboard_data set payload = '{\"features\":{\"not\":\"a list\"}}'::jsonb "
+        "where data_type='community_contact'")
+    before = _stamp(sql, "community_contact")
+    sql(f"delete from field_survey_points where id = '{pin}'")
+    assert sql(f"select count(*) from field_survey_points where id = '{pin}'") == "0"
+    assert _stamp(sql, "community_contact") == before
+
+
+def test_trigger_function_is_not_granted_to_anon_or_authenticated(sql):
+    for role in ("anon", "authenticated"):
+        assert sql(f"select has_function_privilege('{role}', "
+                   f"'public._kd_prune_deleted_field_pin()', 'execute')") == "f"
