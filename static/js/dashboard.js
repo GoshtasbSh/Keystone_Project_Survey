@@ -39,6 +39,11 @@ let sbClient = null;
 let currentUserId = null;
 let currentDisplayName = 'Teammate';
 let fieldPointsData = { type: 'FeatureCollection', features: [] };
+// True once the live field_survey_points list has loaded (server endpoint,
+// or a non-empty direct read). Until then blob field copies cannot be
+// checked against it and are left alone.
+let _fieldPointsAuthoritative = false;
+let _parkedFieldCopies = [];   // blob field copies hidden because their pin no longer exists
 let teamChatMessages  = [];        // [{id, user_id, display_name, body, sent_at, attachment_url, attachment_type}]
 let chatUnreadCount   = 0;
 let activeTeamSubtab  = 'activity'; // 'activity' | 'chats'
@@ -162,6 +167,113 @@ function responseCountsSummary(analysis, validation) {
   const responses = Number(a.n_mapped_responses ?? (households + excluded)) || 0;
   const unit = a.n_households != null ? 'households' : 'responses';
   return { households, responses, excluded, unit };
+}
+
+// A field-visit copy lives in the community_contact blob next to CSV
+// contacts (daily-refresh.py / upload.py append them with source='field').
+function isFieldCopy(p) {
+  return !!p && (p.source === 'field' || (p.field_point_id != null && p.field_point_id !== ''));
+}
+
+// Split contact features into what may be drawn and field copies whose pin
+// no longer exists in field_survey_points (deleted test/QA pins linger in
+// the blob). `parked` are copies hidden earlier; one whose pin has since
+// appeared is re-admitted, and a parked copy the fresh blob already carries
+// is dropped (deduped by field_point_id).
+function partitionFieldCopies(features, parked, liveIds) {
+  const kept = [], stale = [], seen = new Set();
+  let removed = 0, readmitted = 0;
+  const visit = (f, fromParked) => {
+    const p = (f && f.properties) || {};
+    if (!isFieldCopy(p)) { if (!fromParked) kept.push(f); return; }
+    const id = String(p.field_point_id ?? '');
+    if (seen.has(id)) return;
+    seen.add(id);
+    if (id && liveIds.has(id)) {
+      kept.push(f);
+      if (fromParked) readmitted++;
+    } else {
+      stale.push(f);
+      if (!fromParked) removed++;
+    }
+  };
+  for (const f of (features || [])) visit(f, false);
+  for (const f of (parked || [])) visit(f, true);
+  return { kept, stale, changed: removed > 0 || readmitted > 0 };
+}
+
+// Live unified per-status counts. CSV contacts coincident (≤30 m) with a
+// field point inherit the field point's status and the pair counts once;
+// standalone field points count on their own. Field copies in the blob ARE
+// field points, so once the live list has loaded they are skipped (counting
+// them double-counted visits); before it loads they stand in for it.
+// Same grid index and first-nearest tie rule as before.
+function countUnifiedStatuses(csvFeatures, fieldFeatures, fieldAuthoritative) {
+  const counts = {};
+  const csv = (csvFeatures || []).filter(f => !(fieldAuthoritative && isFieldCopy(f && f.properties)));
+  const field = fieldFeatures || [];
+  if (!csv.length && !field.length) return counts;
+  const CELL = 0.00040;
+  const cellKey = (lat, lon) => `${Math.round(lat / CELL)}|${Math.round(lon / CELL)}`;
+  const fieldByCell = new Map();
+  field.forEach((f, i) => {
+    const [lon, lat] = f.geometry.coordinates;
+    const k = cellKey(lat, lon);
+    if (!fieldByCell.has(k)) fieldByCell.set(k, []);
+    fieldByCell.get(k).push(i);
+  });
+  const fieldUsed = new Set();
+  const distM = (lat1, lon1, lat2, lon2) => {
+    const dy = (lat2 - lat1) * 111320;
+    const dx = (lon2 - lon1) * 111320 * Math.cos(lat1 * Math.PI / 180);
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+  csv.forEach(f => {
+    const [lon, lat] = f.geometry.coordinates;
+    const ky = Math.round(lat / CELL), kx = Math.round(lon / CELL);
+    let matched = -1, bestDist = Infinity;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const c = fieldByCell.get(`${ky + dy}|${kx + dx}`);
+        if (!c) continue;
+        for (const idx of c) {
+          if (fieldUsed.has(idx)) continue;
+          const [flon, flat] = field[idx].geometry.coordinates;
+          const d = distM(lat, lon, flat, flon);
+          if (d <= 30 && d < bestDist) { bestDist = d; matched = idx; }
+        }
+      }
+    }
+    const status = matched >= 0
+      ? (field[matched].properties.status || f.properties.status || 'Unknown')
+      : (f.properties.status || 'Unknown');
+    if (matched >= 0) fieldUsed.add(matched);
+    counts[status] = (counts[status] || 0) + 1;
+  });
+  field.forEach((fp, i) => {
+    if (fieldUsed.has(i)) return;
+    const s = fp.properties.status || 'Unknown';
+    counts[s] = (counts[s] || 0) + 1;
+  });
+  return counts;
+}
+
+// Match-status legend (G1 matched / G2 completed-no-Qualtrics / G3
+// Qualtrics-only). Field copies never carry a group; excluded earlier
+// duplicate responses are never counted.
+function countMatchGroups(contactFeatures, iaqFeatures) {
+  const counts = { matched: 0, contact_only: 0, iaq_only: 0 };
+  for (const f of (contactFeatures || [])) {
+    const p = (f && f.properties) || {};
+    if (isFieldCopy(p)) continue;
+    if (p.match_status === 'matched' || p.match_status === 'contact_only') counts[p.match_status]++;
+  }
+  for (const f of (iaqFeatures || [])) {
+    const p = (f && f.properties) || {};
+    if (p.dup_excluded === true || p.dup_excluded === 'true') continue;
+    if (p.match_status === 'iaq_only') counts.iaq_only++;
+  }
+  return counts;
 }
 
 // ==== PURE-HELPERS END ====
@@ -351,6 +463,10 @@ async function loadData() {
       _authFetch('/api/analysis'),
       fetchIaqPoints(),
       _authFetch('/api/analysis?type=iaq'),
+      // Field pins in the same parallel batch, so the first frame never
+      // draws a deleted pin's blob copy. Sets fieldPointsData +
+      // _fieldPointsAuthoritative; never throws.
+      loadFieldPointsFromServer(),
     ]);
     const EMPTY_GJ = { type: 'FeatureCollection', features: [] };
     const _safeJson = async (res, fallback) => {
@@ -362,6 +478,7 @@ async function loadData() {
       try { return await res.json(); } catch { return fallback; }
     };
     surveyData   = await _safeJson(ptsRes,    EMPTY_GJ);
+    pruneStaleFieldCopies();
     parcelsData  = await _safeJson(parRes,    EMPTY_GJ);
     analysisData = await _safeJson(anaRes,    {});
     iaqData      = await _safeJson(iaqPtsRes, EMPTY_GJ);
@@ -378,6 +495,11 @@ async function loadData() {
 
     if (analysisData.status_colors) {
       Object.assign(STATUS_COLORS, analysisData.status_colors);
+    }
+    // The field pins were prefetched before the status colours arrived:
+    // colour them now, before addLayers() hands them to the map source.
+    for (const f of fieldPointsData.features) {
+      f.properties.color = STATUS_COLORS[f.properties.status] || '#9ca3af';
     }
 
     addLayers();
@@ -447,6 +569,7 @@ async function refreshAllData() {
       try { return await res.json(); } catch { return fb; }
     };
     surveyData    = await safe(ptsRes, EMPTY_GJ);
+    pruneStaleFieldCopies();
     parcelsData   = await safe(parRes, EMPTY_GJ);
     analysisData  = await safe(anaRes, {});
     iaqData       = await safe(iaqPtsRes, EMPTY_GJ);
@@ -778,7 +901,10 @@ async function loadFieldPointsFromServer() {
     const r = await fetch('/api/field-points', { cache: 'no-store' });
     if (!r.ok) return false;
     const fc = await r.json();
-    const feats = (fc && Array.isArray(fc.features)) ? fc.features : [];
+    // A malformed body must not count as "there are no pins": that would
+    // hide every field copy.
+    if (!fc || !Array.isArray(fc.features)) return false;
+    const feats = fc.features;
     fieldPointsData = {
       type: 'FeatureCollection',
       features: feats.map(f => {
@@ -798,6 +924,7 @@ async function loadFieldPointsFromServer() {
         }, currentUserId);
       }).filter(f => Number.isFinite(f.geometry.coordinates[0]) && Number.isFinite(f.geometry.coordinates[1])),
     };
+    _fieldPointsAuthoritative = true;
     setFieldPointsData();
     return fieldPointsData.features.length > 0;
   } catch (e) {
@@ -856,7 +983,10 @@ async function initFieldPoints() {
   // anon viewers / users not yet in team_members (RLS would silently block
   // a direct Supabase read), so the analysis panel and legend reflect real
   // field activity from the very first frame.
-  const serverLoaded = await loadFieldPointsFromServer();
+  // loadData() already fetched the list in parallel; only refetch when that failed.
+  const serverLoaded = _fieldPointsAuthoritative
+    ? fieldPointsData.features.length > 0
+    : await loadFieldPointsFromServer();
   if (serverLoaded) {
     if (typeof stampCoincidentContacts === 'function') stampCoincidentContacts();
     if (typeof buildLegend === 'function') buildLegend();
@@ -963,7 +1093,8 @@ async function initFieldPoints() {
           .select('id, lat, lon, status, notes, collector_id, collector_name, collected_at')
           .order('collected_at', { ascending: false })
           .range(from, from + PAGE - 1);
-        if (error || !Array.isArray(data) || data.length === 0) break;
+        if (error) { console.warn('field_survey_points direct read failed:', error); break; }
+        if (!Array.isArray(data) || data.length === 0) break;
         all.push(...data);
         if (data.length < PAGE) break;
         from += PAGE;
@@ -976,6 +1107,9 @@ async function initFieldPoints() {
           type: 'FeatureCollection',
           features: all.map(p => fieldPointFeature(p, currentUserId)),
         };
+        // Only a non-empty direct read is authoritative: RLS can silently
+        // return [] and must not hide every field copy.
+        _fieldPointsAuthoritative = true;
         setFieldPointsData();
         // First-load: surveyData is usually loaded by now; stamp coincident
         // contacts so the survey-points layer hides duplicate CSV dots from
@@ -2138,13 +2272,31 @@ function _nearestFieldFeature(lat, lon, fieldByCell) {
   return best;
 }
 
+// Drop blob field copies whose pin is no longer in field_survey_points
+// (deleted test/QA pins), so they are never drawn, searched or counted.
+// Replaces surveyData with a NEW object because _getSearchIndex() caches
+// by identity. Returns true when surveyData changed.
+function pruneStaleFieldCopies() {
+  if (!_fieldPointsAuthoritative || !surveyData?.features) return false;
+  const liveIds = new Set((fieldPointsData?.features || []).map(f => String(f.properties.id)));
+  const r = partitionFieldCopies(surveyData.features, _parkedFieldCopies, liveIds);
+  _parkedFieldCopies = r.stale;
+  if (!r.changed) return false;
+  surveyData = { ...surveyData, features: r.kept };
+  if (r.stale.length) {
+    console.info(`[field] ${r.stale.length} field cop${r.stale.length === 1 ? 'y' : 'ies'} hidden: pin no longer in field_survey_points`,
+      r.stale.map(f => f.properties.field_point_id));
+  }
+  return true;
+}
+
 // Mark CSV contacts that are coincident with a field-collected point so the
 // map filter can hide the CSV dot (the field-point dot stays visible). Pushes
 // updated geojson back to the map source if anything changed. Returns true
-// when a re-render is needed.
+// when a re-render is needed (also when stale field copies were pruned).
 function stampCoincidentContacts() {
+  const pruned = pruneStaleFieldCopies();
   const csv = surveyData?.features || [];
-  if (!csv.length) return false;
   const fieldByCell = _fieldCellIndex();
   let changed = false;
   for (const f of csv) {
@@ -2156,76 +2308,26 @@ function stampCoincidentContacts() {
       changed = true;
     }
   }
-  if (changed) {
-    // The geojson source is registered as 'survey' (line ~268); 'survey-points'
+  if (changed || pruned) {
+    // The geojson source is registered as 'survey' (line ~422); 'survey-points'
     // is the LAYER id, not the source. Pushing setData on the source forces
     // MapLibre to re-evaluate the has_field_point filter against fresh data.
-    const src = (typeof map !== 'undefined') && map.getSource && map.getSource('survey');
+    const hasMap = (typeof map !== 'undefined') && map && map.getSource;
+    const src = hasMap && map.getSource('survey');
     if (src) src.setData(surveyData);
+    if (pruned && hasMap) {
+      map.getSource('survey-clustered')?.setData(surveyData);
+      if (typeof applyHeatmapClusterFilter === 'function') applyHeatmapClusterFilter();
+    }
   }
-  return changed;
+  return changed || pruned;
 }
 
 // Live unified per-status counts. CSV contacts coincident with a field point
 // inherit the field point's status (more recent ground truth) and the pair
 // counts once. Standalone field points count on their own.
 function computeUnifiedStatusCounts() {
-  const counts = {};
-  const csv   = (surveyData?.features || []);
-  const field = (fieldPointsData?.features || []);
-  if (!csv.length && !field.length) return counts;
-
-  // Spatial index for field points: ~40 m cell so the 30 m radius is covered
-  // by checking the cell + 8 neighbours.
-  const CELL = 0.00040;
-  const cellKey = (lat, lon) => `${Math.round(lat / CELL)}|${Math.round(lon / CELL)}`;
-  const fieldByCell = new Map();
-  field.forEach((f, i) => {
-    const [lon, lat] = f.geometry.coordinates;
-    const k = cellKey(lat, lon);
-    if (!fieldByCell.has(k)) fieldByCell.set(k, []);
-    fieldByCell.get(k).push(i);
-  });
-
-  const fieldUsed = new Set();
-  const distM = (lat1, lon1, lat2, lon2) => {
-    const dy = (lat2 - lat1) * 111320;
-    const dx = (lon2 - lon1) * 111320 * Math.cos(lat1 * Math.PI / 180);
-    return Math.sqrt(dx * dx + dy * dy);
-  };
-
-  csv.forEach(f => {
-    const [lon, lat] = f.geometry.coordinates;
-    const ky = Math.round(lat / CELL), kx = Math.round(lon / CELL);
-    const candidates = [];
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        const c = fieldByCell.get(`${ky + dy}|${kx + dx}`);
-        if (c) candidates.push(...c);
-      }
-    }
-    let matched = -1;
-    let bestDist = Infinity;
-    for (const idx of candidates) {
-      if (fieldUsed.has(idx)) continue;
-      const [flon, flat] = field[idx].geometry.coordinates;
-      const d = distM(lat, lon, flat, flon);
-      if (d <= 30 && d < bestDist) { bestDist = d; matched = idx; }
-    }
-    const status = matched >= 0
-      ? (field[matched].properties.status || f.properties.status || 'Unknown')
-      : (f.properties.status || 'Unknown');
-    if (matched >= 0) fieldUsed.add(matched);
-    counts[status] = (counts[status] || 0) + 1;
-  });
-
-  // Unmatched field points: count as standalone contacts.
-  field.forEach((fp, i) => {
-    if (fieldUsed.has(i)) return;
-    const s = fp.properties.status || 'Unknown';
-    counts[s] = (counts[s] || 0) + 1;
-  });
-  return counts;
+  return countUnifiedStatuses(surveyData?.features, fieldPointsData?.features, _fieldPointsAuthoritative);
 }
 
 // ── Legend (unified: color picker + filter) ─────────────────────────────────
@@ -2296,15 +2398,7 @@ function buildLegend() {
 let activeMatchFilter = null;
 
 function _countMatchGroups() {
-  const counts = { matched: 0, contact_only: 0, iaq_only: 0 };
-  for (const f of (surveyData?.features || [])) {
-    const ms = f.properties?.match_status;
-    if (ms === 'matched' || ms === 'contact_only') counts[ms]++;
-  }
-  for (const f of (iaqData?.features || [])) {
-    if (f.properties?.match_status === 'iaq_only') counts.iaq_only++;
-  }
-  return counts;
+  return countMatchGroups(surveyData?.features, iaqData?.features);
 }
 
 function updateMatchStatusPanel() {
@@ -3310,6 +3404,7 @@ async function restoreVersion(id, label, type) {
     if (type === 'contact') {
       const pts = await (await _authFetch('/api/survey-points')).json();
       surveyData = pts;
+      pruneStaleFieldCopies();
       _backfillContactMatchStatus(surveyData);
       map.getSource('survey')?.setData(surveyData);
       map.getSource('survey-clustered')?.setData(surveyData);
@@ -3320,6 +3415,11 @@ async function restoreVersion(id, label, type) {
       const ana = await (await _authFetch('/api/analysis')).json();
       analysisData = ana;
       buildAnalysis();
+      // Restore replaced surveyData wholesale: re-stamp field coincidence
+      // so the CSV duplicate of a field pin is hidden again.
+      stampCoincidentContacts();
+      applyFilters();
+      buildLegend();
       fitBounds();
     } else {
       const iaqPts = await (await fetchIaqPoints()).json();
@@ -3366,6 +3466,7 @@ async function runDailyRefresh() {
       // the cron just merged.
       const pts = await (await _authFetch('/api/survey-points')).json();
       surveyData = pts;
+      pruneStaleFieldCopies();
       _backfillContactMatchStatus(surveyData);
       map.getSource('survey')?.setData(surveyData);
       map.getSource('survey-clustered')?.setData(surveyData);
