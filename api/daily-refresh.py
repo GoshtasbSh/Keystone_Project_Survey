@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).parent))
 from _lib import (
-    supabase_admin, load_cached, json_response, empty_geojson, haversine_m,
+    supabase_admin, load_cached, json_response, empty_geojson,
     _bearer_jwt, supabase_anon, merge_preserve_analysis,
 )
 from _field_layer import (
@@ -99,6 +99,20 @@ def _refresh_iaq_match_status(iaq_features: list) -> None:
         if props is None:
             continue
         props["match_status"] = "matched" if props.get("iaq_matched") else "iaq_only"
+
+
+def _refresh_iaq_validation_counts(iaq_payload: dict, iaq_feats: list,
+                                   contact_feats: list) -> None:
+    """Recompute the matched / unmatched counts stored with the IAQ blob
+    after the field pass flipped iaq_matched, in both places the blob keeps
+    them (payload.validation and payload.analysis.validation). Other keys
+    (completed_in_csv, responses_mapped, ...) are kept. Mutates in place."""
+    from survey_logic import build_validation_summary
+    counts = build_validation_summary(iaq_feats, contact_feats)
+    analysis = dict(iaq_payload.get("analysis") or {})
+    analysis["validation"] = {**(analysis.get("validation") or {}), **counts}
+    iaq_payload["analysis"] = analysis
+    iaq_payload["validation"] = {**(iaq_payload.get("validation") or {}), **counts}
 
 
 # ── Task 16: daily integrity metrics ────────────────────────────────────
@@ -193,31 +207,20 @@ def _field_row_to_feature(row: dict) -> dict | None:
     return field_row_to_feature(row)
 
 
-def _match_field_to_iaq(field_feats: list, iaq_feats: list) -> int:
-    """Run the shared parcel-aware matcher; fall back to a tight 30 m
-    haversine when the parcel index cannot be built."""
+def _match_field_to_iaq(field_feats: list, iaq_feats: list, parcel_loader=None) -> int:
+    """Link pins with the ONE shared matcher (_processing._apply_iaq_to_field_features:
+    note house number <= 60 m, then same parcel, then NEAREST within 30 m).
+    Without a parcel index it still runs, skipping only the parcel tier —
+    never a separate first-survey-within-30-m loop (audit P21)."""
     if not (iaq_feats and field_feats):
         return 0
+    from _processing import load_parcel_index, _apply_iaq_to_field_features
     try:
-        # Late import: keeps the function bundle slim when there is no work.
-        from _processing import load_parcel_index, _apply_iaq_to_field_features
-        parcel_idx = load_parcel_index()
-        return _apply_iaq_to_field_features(field_feats, iaq_feats, parcel_idx=parcel_idx)
+        parcel_idx = (parcel_loader or load_parcel_index)()
     except Exception as e:
-        print(f"[daily-refresh] parcel-aware match unavailable ({e}); "
-              f"falling back to 30 m distance.")
-    n = 0
-    for ff in field_feats:
-        f_lon, f_lat = ff["geometry"]["coordinates"]
-        for iaq_f in iaq_feats:
-            i_lon, i_lat = iaq_f["geometry"]["coordinates"]
-            if haversine_m(f_lat, f_lon, i_lat, i_lon) <= 30:
-                ff["properties"]["status"] = "Completed"
-                ff["properties"]["has_iaq_survey"] = True
-                iaq_f["properties"]["iaq_matched"] = True
-                n += 1
-                break
-    return n
+        print(f"[daily-refresh] parcel index unavailable ({e}); matching without parcel snap.")
+        parcel_idx = None
+    return _apply_iaq_to_field_features(field_feats, iaq_feats, parcel_idx=parcel_idx)
 
 
 def _run_refresh() -> dict:
@@ -264,7 +267,12 @@ def _run_refresh() -> dict:
     iaq_feats = (iaq_stored.get("geojson") or {}).get("features") or []
     iaq_matched_before = [bool((f.get("properties") or {}).get("iaq_matched"))
                           for f in iaq_feats]
-    _match_field_to_iaq(field_feats, iaq_feats)
+    try:
+        _match_field_to_iaq(field_feats, iaq_feats)
+    except Exception as e:
+        # Every pin above was rebuilt without its survey link; writing now
+        # would strip every link from the map. Skip this tick instead.
+        return {"refreshed": False, "reason": f"Field-survey matching failed: {e}"}
 
     try:
         from _processing import tag_contact_match_status, dedup_contacts_at_parcel
@@ -304,6 +312,7 @@ def _run_refresh() -> dict:
         geo = dict(iaq_payload.get("geojson") or {})
         geo["features"] = iaq_feats
         iaq_payload["geojson"] = geo
+        _refresh_iaq_validation_counts(iaq_payload, iaq_feats, contacts)
         blobs.append({"data_type": "iaq_survey", "payload": iaq_payload})
     try:
         # parcel_stats etc. are preserved from the cached analysis (Vercel
