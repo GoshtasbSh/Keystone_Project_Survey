@@ -98,10 +98,12 @@ def empty_geojson() -> dict:
 
 # ── Authentication helpers ─────────────────────────────────────────────────
 
-# Hard cap on request body size for upload endpoints. Bigger than any real
-# Qualtrics or Excel export but small enough that a single function invocation
-# can't be made to read megabytes of attacker-controlled bytes into memory.
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
+# Hard cap on request body size for upload endpoints. Vercel Functions reject
+# request bodies over 4.5 MB with a platform (non-JSON) 413 before our code
+# runs, so a larger cap here was dead code and the browser showed only
+# "Upload failed" (audit 2026-10-13 F14). Matches dashboard.js MAX_MB (4 MB
+# file + multipart overhead). The October Qualtrics CSV is ~95 KB.
+MAX_UPLOAD_BYTES = int(4.5 * 1024 * 1024)  # 4.5 MB — Vercel's request-body limit
 
 
 # Per-respondent IAQ answer fields. Anonymous /api/iaq-points strips these

@@ -3948,10 +3948,13 @@ async function uploadFile(zone, endpoint, file) {
   const origHtml = zone.innerHTML;
   const isIAQ = endpoint.includes('type=iaq');
 
-  // Client-side validation before any network request
-  const MAX_MB = 15;
+  // Client-side validation before any network request. Vercel rejects
+  // request bodies over 4.5 MB before our function runs (non-JSON 413), so
+  // stop at 4 MB (file + multipart overhead) with a message that says what
+  // to do. Mirrors api/_lib.py MAX_UPLOAD_BYTES. A Qualtrics CSV is ~0.1 MB.
+  const MAX_MB = 4;
   if (file.size > MAX_MB * 1024 * 1024) {
-    showToast(`File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum is ${MAX_MB} MB.`, 7000);
+    showToast(`File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). The upload limit is ${MAX_MB} MB — save the sheet as CSV, or remove unused tabs/columns, and try again.`, 9000);
     return;
   }
   if (isIAQ && file.name.split('.').pop().toLowerCase() !== 'csv') {
@@ -4012,8 +4015,15 @@ async function uploadFile(zone, endpoint, file) {
           try { resolve(JSON.parse(xhr.responseText)); }
           catch { resolve({}); }
         } else {
-          try { reject(new Error(JSON.parse(xhr.responseText).detail || 'Upload failed')); }
-          catch { reject(new Error('Upload failed')); }
+          let body = null;
+          try { body = JSON.parse(xhr.responseText); } catch { /* platform error page */ }
+          const msg = xhr.status === 413
+            ? `File too large for the server (limit ${MAX_MB} MB). Save it as CSV and try again.`
+            : ((body && body.detail) || `Upload failed (HTTP ${xhr.status})`);
+          const err = new Error(msg);
+          err.status = xhr.status;
+          err.body = body;
+          reject(err);
         }
       };
 
@@ -4103,6 +4113,19 @@ async function uploadFile(zone, endpoint, file) {
     xhrRef.done = true;
     if (xhrRef.pulse) clearInterval(xhrRef.pulse);
     if (isIAQ) hideAnalysisOverlay();
+    // 409 = the server's regression guard (fewer responses / contacts than
+    // are stored). Show its explanation and let the admin override once;
+    // the retry carries ?force=1, which the server records in the audit row.
+    const reason = e?.body?.reason;
+    if (e?.status === 409 && !/[?&]force=1\b/.test(endpoint)
+        && (reason === 'response_regression' || reason === 'contact_regression'
+            || reason === 'degraded_export')) {
+      zone.innerHTML = origHtml;
+      if (confirm(`${e.message}\n\nUpload anyway?`)) {
+        return uploadFile(zone, `${endpoint}${endpoint.includes('?') ? '&' : '?'}force=1`, file);
+      }
+      return;
+    }
     zone.classList.remove('success');
     // Server error message can include user-supplied input echoed back
     // (e.g. malformed CSV column names). Escape before injecting.

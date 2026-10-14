@@ -73,5 +73,22 @@ class PositionalFallbackTests(unittest.TestCase):
         self.assertEqual(out["education"], "cell142")
 
 
+from api._lib import MAX_UPLOAD_BYTES  # noqa: E402
+
+
+class UploadSizeLimitTests(unittest.TestCase):
+    """F14: client and server limits must sit under Vercel's 4.5 MB cap."""
+
+    def test_server_cap_is_vercel_body_limit(self):
+        self.assertLessEqual(MAX_UPLOAD_BYTES, int(4.5 * 1024 * 1024))
+
+    def test_client_cap_is_below_server_cap_and_413_is_explained(self):
+        js = (ROOT / "static" / "js" / "dashboard.js").read_text()
+        self.assertIn("const MAX_MB = 4;", js)
+        self.assertNotIn("const MAX_MB = 15;", js)
+        self.assertIn("xhr.status === 413", js)
+        self.assertIn("force=1", js)
+
+
 if __name__ == "__main__":
     unittest.main()
