@@ -49,7 +49,8 @@ filter_iaq_symptom {field,values}  — auto-shows iaq_points
   respiratory_ill|asthma_freq|wheeze_freq|headache_freq → ["weekly","month","season"]
   has_mold→[true] · hospital_visit→["yes"] · ownership→["Owner"/"Renter"]
   risk_tier→["High"/"Medium"/"Low"] · housing_type→["Single Wide"/"Double Wide"/"Site Built"]
-  coord_source→["geocoded"]
+  coord_source→["address_matched"|"parcel_exact"|"parcel_fuzzy"|"parcel_snapped"|"geocoded"]  (Census-placed = parcel_snapped, geocoded)
+    no IAQ point is placed by GPS, so never filter coord_source for a GPS value
 filter_contact_status {statuses:[...]}  — auto-shows contact_survey
   "Completed"|"No Answer"|"Inaccessible"|"Not Interested"|"Left Info"|"Vacant"|"Follow Up" · []=all
 show_iaq_choropleth {field}  — auto-shows iaq_points | overall_risk|health_score|iaq_score|struct_score
