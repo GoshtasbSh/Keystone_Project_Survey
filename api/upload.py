@@ -493,7 +493,11 @@ def prepare_iaq_upload(sb, filename: str, csv_bytes: bytes, *, force: bool = Fal
         versions.append({
             'data_type': 'field_survey',
             'payload':   {'n_field_upgraded': n_field_upgraded},
-            'label':     f'IAQ-merged {today} — {n_field_upgraded} field points completed · {filename}',
+            # Linking no longer changes a pin's status (the surveyor's is
+            # kept), so the History label says linked, not completed.
+            'label':     (f'IAQ-merged {today} — {n_field_upgraded} field '
+                          f'point{"" if n_field_upgraded == 1 else "s"} linked to a '
+                          f'Qualtrics response · {filename}'),
             'n_points':  n_field_upgraded,
             **audit,
         })

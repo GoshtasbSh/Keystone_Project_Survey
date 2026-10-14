@@ -355,6 +355,29 @@ function conditionChartSeries(conditions) {
   };
 }
 
+// IAQ upload notices for one toast, warnings first. Migration-26 fallback
+// (api/upload.py _audit_trail_summary): the data was saved, but the
+// History/audit row is partial or missing. Field pins are "linked": linking
+// keeps the surveyor's status.
+function iaqUploadNotices(data) {
+  const d = data || {};
+  const lines = [];
+  let warn = false;
+  if (d.audit_trail && d.audit_trail.status && d.audit_trail.status !== 'full') {
+    lines.push(`Upload saved, but History is incomplete: ${d.audit_trail.detail}`);
+    warn = true;
+  }
+  if (d.validation && d.validation.missing_columns) {
+    lines.push('Warning: missing Qualtrics columns — affected scores default to 0. See console.');
+    warn = true;
+  }
+  const nc = Number(d.n_upgraded) || 0;
+  if (nc > 0) lines.push(`${nc} community contact${nc > 1 ? 's' : ''} automatically marked Completed (Qualtrics survey matched)`);
+  const nf = Number(d.n_field_upgraded) || 0;
+  if (nf > 0) lines.push(`${nf} field survey point${nf > 1 ? 's' : ''} linked to a Qualtrics response`);
+  return { lines, durationMs: warn ? 12000 : 5000 };
+}
+
 // ==== PURE-HELPERS END ====
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -377,7 +400,7 @@ function showToast(msg, durationMs = 5000) {
     el.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);' +
       'background:var(--card,#1e293b);color:var(--text,#e2e8f0);padding:10px 18px;' +
       'border-radius:8px;font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.45);' +
-      'z-index:9999;pointer-events:none;opacity:0;transition:opacity .25s;max-width:420px;text-align:center;';
+      'z-index:9999;pointer-events:none;opacity:0;transition:opacity .25s;max-width:420px;text-align:center;white-space:pre-line;';
     document.body.appendChild(el);
   }
   el.textContent = msg;
@@ -4389,20 +4412,14 @@ async function uploadFile(zone, endpoint, file) {
       if (iaqToggle) iaqToggle.checked = true;
       document.getElementById('chat-btn')?.classList.add('has-data');
 
-      if (data.n_upgraded > 0) {
-        showToast(`${data.n_upgraded} community contact${data.n_upgraded > 1 ? 's' : ''} automatically marked Completed (Qualtric survey matched)`);
-      }
-      if (data.n_field_upgraded > 0) {
-        showToast(`${data.n_field_upgraded} field survey point${data.n_field_upgraded > 1 ? 's' : ''} upgraded to Completed`);
-      }
-      // Migration-26 fallback (api/upload.py _audit_trail_summary): the data
-      // was saved, but the History/audit row is partial or missing.
+      // One toast for every notice: showToast replaces the previous toast,
+      // so separate calls let a later notice hide the audit-trail warning.
+      const _notices = iaqUploadNotices(data);
+      if (_notices.lines.length) showToast(_notices.lines.join('\n'), _notices.durationMs);
       if (data.audit_trail && data.audit_trail.status && data.audit_trail.status !== 'full') {
-        showToast(`Upload saved, but History is incomplete: ${data.audit_trail.detail}`, 12000);
         console.warn('Upload audit trail:', data.audit_trail);
       }
       if (data.validation && data.validation.missing_columns) {
-        showToast(`Warning: missing Qualtrics columns — affected scores default to 0. See console.`, 9000);
         console.warn('IAQ upload missing columns:', data.validation.missing_columns);
       }
 

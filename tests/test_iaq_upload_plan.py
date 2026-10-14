@@ -144,6 +144,11 @@ class IaqUploadPlanTests(unittest.TestCase):
         self.assertEqual(plan["upgraded_ids"], ["b0467956-live"])
         labels = [v["label"] for v in plan["versions"]]
         self.assertTrue(any("1 deleted pins removed" in l for l in labels), labels)
+        # History label: linking keeps the surveyor's status, so "linked".
+        field_v = [v for v in plan["versions"] if v["data_type"] == "field_survey"]
+        self.assertEqual(len(field_v), 1)
+        self.assertIn("1 field point linked to a Qualtrics response · oct.csv", field_v[0]["label"])
+        self.assertNotIn("completed", field_v[0]["label"])
         self.assertEqual(plan["versions"][0]["source_filename"], "oct.csv")
 
     def test_linked_pin_keeps_its_status_and_is_still_written_back(self):
