@@ -17,12 +17,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'api'))
 
 from _processing import (  # noqa: E402
-    _supersede_repeat_households, load_parcel_index, process_iaq_bytes,
+    _supersede_repeat_households,
 )
 
-OCT = pathlib.Path('/Users/goshtasbshahriari/UF Dropbox/Goshtasb Shahriari Mehr/'
-                   'DTSC_Lab/Keystone_Data/'
-                   'Keystone Heights Survey - V1_October 7, 2026_00.47.csv')
 
 # earlier -> kept, for the 8 households in the October export.
 OCT_PAIRS = {
@@ -84,10 +81,8 @@ def test_responses_without_a_house_number_are_never_grouped():
 
 
 @pytest.fixture(scope='module')
-def october():
-    if not OCT.exists():
-        pytest.skip('October export not present')
-    return process_iaq_bytes(OCT.read_bytes(), [], load_parcel_index())
+def october(october_iaq_copy):
+    return october_iaq_copy
 
 
 def test_october_keeps_one_response_per_household(october):

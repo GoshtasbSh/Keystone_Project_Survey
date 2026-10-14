@@ -34,12 +34,6 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'api'))
 
-from _processing import load_parcel_index, process_iaq_bytes  # noqa: E402
-
-OCTOBER = pathlib.Path('/Users/goshtasbshahriari/UF Dropbox/Goshtasb Shahriari Mehr/'
-                       'DTSC_Lab/Keystone_Data/'
-                       'Keystone Heights Survey - V1_October 7, 2026_00.47.csv')
-
 
 def _all_props(geo):
     """Drawn plus superseded features (GAP-10), for per-respondent lookups."""
@@ -54,10 +48,8 @@ def _mean1(values):
 
 
 @pytest.fixture(scope='module')
-def october():
-    if not OCTOBER.exists():
-        pytest.skip('October export not present')
-    geo, a, streets, *_ = process_iaq_bytes(OCTOBER.read_bytes(), [], load_parcel_index())
+def october(october_iaq_copy):
+    geo, a, streets, *_ = october_iaq_copy
     return geo, a, streets
 
 

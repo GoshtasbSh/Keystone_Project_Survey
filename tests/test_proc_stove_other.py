@@ -10,11 +10,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'api'))
 
-from _processing import _compute_iaq_score, load_parcel_index, process_iaq_bytes  # noqa: E402
-
-OCTOBER = pathlib.Path('/Users/goshtasbshahriari/UF Dropbox/Goshtasb Shahriari Mehr/'
-                       'DTSC_Lab/Keystone_Data/'
-                       'Keystone Heights Survey - V1_October 7, 2026_00.47.csv')
+from _processing import _compute_iaq_score  # noqa: E402
 
 
 def row(**kw):
@@ -45,10 +41,8 @@ def test_other_stove_text_is_scored(stove, text, expected):
     assert _compute_iaq_score(row(Cooking=stove, **{'Cooking _9_TEXT': text})) == expected
 
 
-def test_october_respondent():
-    if not OCTOBER.exists():
-        pytest.skip('October export not present')
-    geo, *_ = process_iaq_bytes(OCTOBER.read_bytes(), [], load_parcel_index())
+def test_october_respondent(october_iaq_copy):
+    geo, *_ = october_iaq_copy
     p = _all_props(geo)
     assert p['R_dGTyY060JYUPQkh']['iaq_score'] == 12      # was 2
     assert p['R_dGTyY060JYUPQkh']['overall_risk'] == 15   # was 11

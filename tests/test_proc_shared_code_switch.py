@@ -24,17 +24,13 @@ sys.path.insert(0, str(ROOT / 'api'))
 
 import survey_logic  # noqa: E402
 from _processing import (  # noqa: E402
-    _apply_qsf_display_labels, _compute_iaq_analysis, load_parcel_index,
-    process_iaq_bytes,
+    _apply_qsf_display_labels, _compute_iaq_analysis,
 )
 from survey_logic import (  # noqa: E402
     SHARED_CODES, compute_struct_score, resolve_answer_label,
     shared_code_choice_key, shared_code_status,
 )
 
-OCTOBER = pathlib.Path('/Users/goshtasbshahriari/UF Dropbox/Goshtasb Shahriari Mehr/'
-                       'DTSC_Lab/Keystone_Data/'
-                       'Keystone Heights Survey - V1_October 7, 2026_00.47.csv')
 
 DECIDED_RESOLUTION = {'QID141': 'original_choice', 'QID17': 'recoded_choice',
                       'QID100': 'original_choice', 'QID221': 'original_choice'}
@@ -161,10 +157,8 @@ def test_status_reports_every_question_resolved():
 
 
 @pytest.fixture(scope='module')
-def october():
-    if not OCTOBER.exists():
-        pytest.skip('October export not present')
-    geo, a, *_ = process_iaq_bytes(OCTOBER.read_bytes(), [], load_parcel_index())
+def october(october_iaq_copy):
+    geo, a, *_ = october_iaq_copy
     return _all_props(geo), a
 
 

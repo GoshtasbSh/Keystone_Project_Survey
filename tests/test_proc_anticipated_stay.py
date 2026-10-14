@@ -5,16 +5,10 @@ from __future__ import annotations
 import pathlib
 import sys
 
-import pytest
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'api'))
 
-from _processing import _compute_iaq_analysis, load_parcel_index, process_iaq_bytes  # noqa: E402
-
-OCTOBER = pathlib.Path('/Users/goshtasbshahriari/UF Dropbox/Goshtasb Shahriari Mehr/'
-                       'DTSC_Lab/Keystone_Data/'
-                       'Keystone Heights Survey - V1_October 7, 2026_00.47.csv')
+from _processing import _compute_iaq_analysis  # noqa: E402
 
 
 def _feat(**props):
@@ -32,10 +26,8 @@ def test_anticipated_stay_counts_each_option():
         '1-5 years': 2, '6-10 years': 1, 'Indefinitely': 1}
 
 
-def test_october_stay_bars():
-    if not OCTOBER.exists():
-        pytest.skip('October export not present')
-    _g, a, *_ = process_iaq_bytes(OCTOBER.read_bytes(), [], load_parcel_index())
+def test_october_stay_bars(october_iaq_copy):
+    _g, a, *_ = october_iaq_copy
     # GAP-10 RE-BASELINE: analysis-level (drawn features only), one latest
     # response per household (MATCH-3): 106 households. Before the dedup
     # (114 placed responses) it read 64 / 27 / 8 / 6 / 10.

@@ -13,13 +13,9 @@ sys.path.insert(0, str(ROOT / 'api'))
 
 from _lib import SURVEY_ANSWER_FIELDS  # noqa: E402
 from _processing import (  # noqa: E402
-    IAQ_FEATURE_POPUP_LABELS, _compute_iaq_score, _has_mold_evidence,
-    _hospital_flag, _mold_text_denies, load_parcel_index, process_iaq_bytes,
+    IAQ_FEATURE_POPUP_LABELS, _compute_iaq_score, _has_mold_evidence, _hospital_flag,
+    _mold_text_denies,
 )
-
-OCTOBER = pathlib.Path('/Users/goshtasbshahriari/UF Dropbox/Goshtasb Shahriari Mehr/'
-                       'DTSC_Lab/Keystone_Data/'
-                       'Keystone Heights Survey - V1_October 7, 2026_00.47.csv')
 
 
 def row(**kw):
@@ -81,10 +77,8 @@ def test_hospital_detail_is_members_only_and_labelled():
 
 
 @pytest.fixture(scope='module')
-def october():
-    if not OCTOBER.exists():
-        pytest.skip('October export not present')
-    geo, analysis, *_ = process_iaq_bytes(OCTOBER.read_bytes(), [], load_parcel_index())
+def october(october_iaq_copy):
+    geo, analysis, *_ = october_iaq_copy
     return geo, analysis
 
 

@@ -17,13 +17,10 @@ sys.path.insert(0, str(ROOT / 'api'))
 
 from _lib import SURVEY_ANSWER_FIELDS, strip_survey_answers  # noqa: E402
 from _processing import (  # noqa: E402
-    IAQ_FEATURE_POPUP_LABELS, OTHER_TEXT_FIELDS, _extract_other_texts,
-    _mold_locations, _redact_free_text, load_parcel_index, process_iaq_bytes,
+    IAQ_FEATURE_POPUP_LABELS, OTHER_TEXT_FIELDS, _extract_other_texts, _mold_locations,
+    _redact_free_text,
 )
 
-OCTOBER = pathlib.Path('/Users/goshtasbshahriari/UF Dropbox/Goshtasb Shahriari Mehr/'
-                       'DTSC_Lab/Keystone_Data/'
-                       'Keystone Heights Survey - V1_October 7, 2026_00.47.csv')
 NEW_FIELDS = set(OTHER_TEXT_FIELDS) | {'mold_locations'}
 
 
@@ -70,10 +67,8 @@ def test_other_text_read_by_exact_import_id_only():
 
 
 @pytest.fixture(scope='module')
-def october():
-    if not OCTOBER.exists():
-        pytest.skip('October export not present')
-    geo, *_ = process_iaq_bytes(OCTOBER.read_bytes(), [], load_parcel_index())
+def october(october_iaq_copy):
+    geo, *_ = october_iaq_copy
     return _all_props(geo)
 
 

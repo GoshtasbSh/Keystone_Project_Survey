@@ -15,13 +15,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'api'))
 
 from _processing import (  # noqa: E402
-    _apply_qsf_display_labels, _parse_years_numeric, load_parcel_index,
-    process_iaq_bytes,
+    _apply_qsf_display_labels, _parse_years_numeric,
 )
 
-OCTOBER = pathlib.Path('/Users/goshtasbshahriari/UF Dropbox/Goshtasb Shahriari Mehr/'
-                       'DTSC_Lab/Keystone_Data/'
-                       'Keystone Heights Survey - V1_October 7, 2026_00.47.csv')
 TYPED_ONE = ['R_71LqP7xFx71BPsl', 'R_1LOVKbX2iH6Xh3j', 'R_6xzTr24XxYm8KC4',
              'R_kVLcdKScFHPgWVR', 'R_2jh8CoISTKs6UKv', 'R_m7ABYoFMDa7R15C',
              'R_l2K5bwgfJ6nwQIN', 'R_eubE9bDo3QIohbh', 'R_iUaZoRCDNkHIsjm']
@@ -58,10 +54,8 @@ def test_years_parser(typed, years):
 
 
 @pytest.fixture(scope='module')
-def october():
-    if not OCTOBER.exists():
-        pytest.skip('October export not present')
-    geo, analysis, *_ = process_iaq_bytes(OCTOBER.read_bytes(), [], load_parcel_index())
+def october(october_iaq_copy):
+    geo, analysis, *_ = october_iaq_copy
     return _all_props(geo), analysis
 
 

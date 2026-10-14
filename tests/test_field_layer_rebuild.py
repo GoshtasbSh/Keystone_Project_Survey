@@ -39,8 +39,6 @@ TEST_PIN = field_copy("b989a847-test", -82.017276, 29.783271, "test_qa_flip",
 GNV_TEST_PIN = field_copy("c3711341-test", -82.289, 29.684, "Test Test", notes="test")
 
 
-
-
 class RebuildFieldLayerTests(unittest.TestCase):
     def setUp(self):
         self.c1 = contact("6116 Harvard Avenue", -81.995533, 29.786862, "Inaccessible")

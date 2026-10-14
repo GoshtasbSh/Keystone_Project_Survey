@@ -90,7 +90,6 @@ class UploadSizeLimitTests(unittest.TestCase):
         self.assertIn("force=1", js)
 
 
-
 class VercelIgnoreTests(unittest.TestCase):
     """DEP-9: internal root markdown must not be deployed (served as static
     files); requirements.txt must stay (Vercel installs from it)."""

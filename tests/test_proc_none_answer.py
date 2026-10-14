@@ -13,13 +13,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'api'))
 
 from _processing import (  # noqa: E402
-    _cell, _is_blank_answer, _isna, _val_at_orig_idx, load_parcel_index,
-    process_iaq_bytes,
+    _cell, _is_blank_answer, _isna, _val_at_orig_idx,
 )
 
-OCTOBER = pathlib.Path('/Users/goshtasbshahriari/UF Dropbox/Goshtasb Shahriari Mehr/'
-                       'DTSC_Lab/Keystone_Data/'
-                       'Keystone Heights Survey - V1_October 7, 2026_00.47.csv')
 LEAK = ('leakage_roof', 'leakage_walls', 'leakage_windows', 'leakage_floor')
 
 
@@ -53,10 +49,8 @@ def test_isna_is_unchanged_for_addresses_and_notes():
 
 
 @pytest.fixture(scope='module')
-def october():
-    if not OCTOBER.exists():
-        pytest.skip('October export not present')
-    geo, *_ = process_iaq_bytes(OCTOBER.read_bytes(), [], load_parcel_index())
+def october(october_iaq_copy):
+    geo, *_ = october_iaq_copy
     return _all_props(geo)
 
 

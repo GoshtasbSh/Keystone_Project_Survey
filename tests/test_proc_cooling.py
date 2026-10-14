@@ -5,16 +5,11 @@ from __future__ import annotations
 import pathlib
 import sys
 
-import pytest
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'api'))
 
-from _processing import _compute_iaq_score, load_parcel_index, process_iaq_bytes  # noqa: E402
+from _processing import _compute_iaq_score  # noqa: E402
 
-OCTOBER = pathlib.Path('/Users/goshtasbshahriari/UF Dropbox/Goshtasb Shahriari Mehr/'
-                       'DTSC_Lab/Keystone_Data/'
-                       'Keystone Heights Survey - V1_October 7, 2026_00.47.csv')
 DK = "Don't know/Not applicable"
 
 
@@ -44,10 +39,8 @@ def test_dont_know_alone_still_does_not_count():
                                      'Cooling System _2': 'less than 10 years'})) == 2
 
 
-def test_october_respondent():
-    if not OCTOBER.exists():
-        pytest.skip('October export not present')
-    geo, *_ = process_iaq_bytes(OCTOBER.read_bytes(), [], load_parcel_index())
+def test_october_respondent(october_iaq_copy):
+    geo, *_ = october_iaq_copy
     # Drawn plus superseded (GAP-10): found whether or not this response is
     # later marked as an earlier same-household answer.
     p = {f['properties']['response_id']: f['properties']

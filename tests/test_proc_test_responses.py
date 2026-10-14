@@ -17,11 +17,8 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'api'))
 
-from _processing import _is_test_response, load_parcel_index, process_iaq_bytes  # noqa: E402
+from _processing import _is_test_response  # noqa: E402
 
-OCTOBER = pathlib.Path('/Users/goshtasbshahriari/UF Dropbox/Goshtasb Shahriari Mehr/'
-                       'DTSC_Lab/Keystone_Data/'
-                       'Keystone Heights Survey - V1_October 7, 2026_00.47.csv')
 PREVIEWS = {'R_78IEP3v2S0sfWk9', 'R_7dXknXZ9AtNEPvF', 'R_7duCmfU1iGEFEXI'}
 
 
@@ -63,10 +60,8 @@ def test_no_status_column_excludes_nothing():
 
 
 @pytest.fixture(scope='module')
-def october():
-    if not OCTOBER.exists():
-        pytest.skip('October export not present')
-    return process_iaq_bytes(OCTOBER.read_bytes(), [], load_parcel_index())
+def october(october_iaq_copy):
+    return october_iaq_copy
 
 
 def test_october_counts_exclude_the_three_previews(october):
