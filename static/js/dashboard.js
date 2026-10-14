@@ -151,13 +151,14 @@ function coordSourceShort(bd) {
 // fields} from api/survey_logic.shared_code_status(). The PI resolved every
 // question on 2026-10-13, so the server ships verified=true and no field
 // carries a note. If a reading is ever reopened (SHARED_CODE_VERIFIED=False)
-// the listed fields get a "label unverified" note again. An older analysis
-// blob without the key was processed before the decision, so it is treated
-// as unverified until it is re-processed.
+// the server sends verified=false and the listed fields get a "label
+// unverified" note again. A missing key (analysis not loaded yet, the
+// request failed, or a blob written before the decision) is the decided
+// state: the USER DECISION says the note must not show for any field.
 const SHARED_CODE_DEFAULT_FIELDS = ['condition', 'afford_urgency', 'mh_skirting'];
 function sharedCodeLabelState(analysis) {
   const s = analysis && analysis.shared_code_labels;
-  const verified = !!(s && s.verified === true);
+  const verified = !(s && s.verified === false);
   const fields = (s && Array.isArray(s.fields) && s.fields.length) ? s.fields : SHARED_CODE_DEFAULT_FIELDS;
   return { verified, unverified: new Set(verified ? [] : fields) };
 }
@@ -1971,9 +1972,10 @@ const _RAW_IAQ_LABELS = {
   cooking_method:      'What stove type do you have in your home? \r\nPlease select all options that apply. - Selected Choice',
 };
 
-// Shown next to a shared-code field until the Qualtrics check is done.
+// Shown next to a shared-code field only when the server reports its reading
+// as reopened (shared_code_labels.verified === false).
 function _sharedCodeNoteHtml(pair) {
-  return `<div class="chart-source" style="color:var(--orange);font-style:normal">Label unverified: Qualtrics exports ${escapeHtml(pair)} with the same code. Pending a check in Qualtrics.</div>`;
+  return `<div class="chart-source" style="color:var(--orange);font-style:normal">Label unverified: Qualtrics exports ${escapeHtml(pair)} with the same code, and this reading is under review.</div>`;
 }
 
 function buildSurveyAnswersTab(iaqProps) {

@@ -7,9 +7,24 @@ import { loadPure, readSource, ROOT } from './load_pure.mjs';
 
 const H = loadPure(['sharedCodeLabelState']);
 
-test('unset switch (key absent) → all three fields flagged', () => {
-  assert.deepEqual([...H.sharedCodeLabelState({}).unverified].sort(), ['afford_urgency', 'condition', 'mh_skirting']);
-  assert.deepEqual([...H.sharedCodeLabelState(undefined).unverified].sort(), ['afford_urgency', 'condition', 'mh_skirting']);
+// USER DECISION 2026-10-13: the note "must then not show for any field". A
+// missing key (analysis not loaded yet, /api/analysis failed, or a blob
+// written before the re-upload) is the decided state, not "unverified".
+test('key absent or analysis not loaded → no field flagged (decided state)', () => {
+  for (const a of [{}, undefined, null, { shared_code_labels: null }]) {
+    const st = H.sharedCodeLabelState(a);
+    assert.equal(st.verified, true);
+    assert.equal(st.unverified.size, 0);
+  }
+});
+
+test('only an explicit verified=false from the server flags the default fields', () => {
+  assert.deepEqual([...H.sharedCodeLabelState({ shared_code_labels: { verified: false } }).unverified].sort(),
+    ['afford_urgency', 'condition', 'mh_skirting']);
+});
+
+test('the note no longer promises a pending Qualtrics check', () => {
+  assert.ok(!/Pending a check in Qualtrics/.test(readSource('static/js/dashboard.js')));
 });
 
 test('server field list wins; verified=true hides every note', () => {
