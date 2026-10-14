@@ -31,7 +31,7 @@ from _processing import (
     parse_multipart_file, load_parcel_index,
     process_iaq_bytes, process_survey_bytes, compute_contact_analysis,
     _apply_iaq_to_field_features, tag_contact_match_status,
-    dedup_contacts_at_parcel, PII_COLS,
+    dedup_contacts_at_parcel, PII_COLS, _build_validation_summary,
 )
 from _field_layer import (
     FIELD_COLS_BASE as _FIELD_COLS_BASE,
@@ -132,6 +132,24 @@ def _all_iaq_features(geojson) -> list:
     repeat) responses kept alongside them. Used by the upload safety guard."""
     g = geojson if isinstance(geojson, dict) else {}
     return list(g.get('features') or []) + list(g.get('superseded_features') or [])
+
+
+def _finalize_iaq_match_state(geojson: dict, analysis: dict, contact_feats: list) -> None:
+    """Re-derive match_status from iaq_matched (same rule as daily-refresh)
+    and refresh the stored matched/unmatched counts after the field pass may
+    have linked more responses (audit P22). Other validation keys
+    (completed_in_csv, responses_mapped, ...) are kept. Mutates in place."""
+    feats = (geojson or {}).get('features') or []
+    for f in feats:
+        p = f.setdefault('properties', {})
+        p['match_status'] = 'matched' if p.get('iaq_matched') else 'iaq_only'
+    validation = analysis.setdefault('validation', {})
+    validation.update(_build_validation_summary(feats, contact_feats))
+
+
+def _with_audit_trail(body: dict, commit_result: dict) -> dict:
+    return {**body, 'audit_trail': _audit_trail_summary(
+        (commit_result or {}).get('version_statuses') or [])}
 
 
 def _is_field_feature(f: dict) -> bool:
@@ -349,9 +367,12 @@ def prepare_iaq_upload(sb, filename: str, csv_bytes: bytes, *, force: bool = Fal
         return _reject(500, 'Processing failed — check Vercel logs.')
 
     # ── SAFETY GUARD — before anything is queued for writing ────────
-    stored_feats = ((stored_iaq or {}).get('geojson') or {}).get('features') or []
+    # Superseded (earlier repeat) responses stay stored in
+    # geojson['superseded_features'], so they count on both sides —
+    # otherwise the first deduplicated upload reads as 8 deleted responses.
     safety = evaluate_iaq_upload_safety(
-        stored_feats, geojson.get('features', []), analysis, filename, force)
+        _all_iaq_features((stored_iaq or {}).get('geojson')),
+        _all_iaq_features(geojson), analysis, filename, force)
     print(f"[upload/iaq] safety={safety['reason'] or 'ok'} "
           f"dropped={len(safety['diff']['dropped'])} added={len(safety['diff']['added'])} "
           f"force={force}")
@@ -372,9 +393,7 @@ def prepare_iaq_upload(sb, filename: str, csv_bytes: bytes, *, force: bool = Fal
     if iaq_feats and field_feats:
         n_field_upgraded = _apply_iaq_to_field_features(
             field_feats, iaq_feats, parcel_idx=parcel_idx)
-        for f in iaq_feats:
-            p = f.get('properties') or {}
-            p['match_status'] = 'matched' if p.get('iaq_matched') else 'iaq_only'
+    _finalize_iaq_match_state(geojson, analysis, contact_only_feats)
     upgraded_ids = [
         ff['properties']['field_point_id'] for ff in field_feats
         if ff['properties'].get('has_iaq_survey')
@@ -536,7 +555,7 @@ class handler(BaseHTTPRequestHandler):
         if plan['status'] != 200:
             return json_response(self, plan['status'], plan['body'])
         try:
-            commit_iaq_upload(sb, plan)
+            result = commit_iaq_upload(sb, plan)
         except Exception as e:
             tb = traceback.format_exc()
             print(f"[upload/iaq] commit FAIL {type(e).__name__}: {e}\n{tb[:2000]}")
@@ -544,7 +563,7 @@ class handler(BaseHTTPRequestHandler):
                 'detail': ('Saving the upload failed. With migration 29 applied nothing '
                            'was changed; check Vercel logs, then upload again.'),
             })
-        return json_response(self, 200, plan['body'])
+        return json_response(self, 200, _with_audit_trail(plan['body'], result))
 
     # ── Survey (community contacts) ────────────────────────────────────
     def _handle_survey(self, filename: str, file_bytes: bytes, admin_uid=None, uploader_email=None):

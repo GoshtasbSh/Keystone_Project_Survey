@@ -165,5 +165,27 @@ class CommitTests(unittest.TestCase):
         self.assertEqual(load_blob_with_stamp(_SeqSB(), "community_contact"), (None, None))
 
 
+class VersionStatusTests(unittest.TestCase):
+    def test_rpc_reports_every_version_full(self):
+        res = commit_dashboard_writes(_RpcSB(), BLOBS, VERSIONS)
+        self.assertEqual(res["version_statuses"], ["full", "full"])
+
+    def test_sequential_reports_base_only_when_audit_columns_missing(self):
+        res = commit_dashboard_writes(_SeqSB(reject_audit_cols=True), BLOBS, VERSIONS)
+        self.assertEqual(res["version_statuses"], ["base_only", "full"])
+        self.assertEqual(res["versions_written"], 2)
+
+    def test_sequential_reports_failed(self):
+        class Fail(_SeqSB):
+            def run(self, q):
+                if q.op == "insert":
+                    self.log.append((q.table, q.op, q.payload))
+                    raise Exception("down")
+                return super().run(q)
+        res = commit_dashboard_writes(Fail(), BLOBS, VERSIONS)
+        self.assertEqual(res["version_statuses"], ["failed", "failed"])
+        self.assertEqual(res["versions_written"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -178,5 +178,61 @@ class IaqUploadPlanTests(unittest.TestCase):
         self.assertEqual(plan["status"], 400)
 
 
+from api.upload import _finalize_iaq_match_state, _with_audit_trail  # noqa: E402
+
+
+def _iaq_feat(rid, matched=False):
+    return {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-82.0171, 29.7798]},
+            "properties": {"response_id": rid, "iaq_matched": matched, "match_status": "iaq_only",
+                           "overall_risk": 17, "risk_tier": "Low", "street_name": "Beloit Ave"}}
+
+
+class _SBWithIaq(_SB):
+    def __init__(self, contact_blob, iaq_blob, **kw):
+        super().__init__(contact_blob, **kw)
+        self.iaq_blob = iaq_blob
+
+    def run(self, q):
+        if (q.op == "select" and q.t == "keystone_dashboard_data"
+                and q.f.get("data_type") == "iaq_survey"):
+            return _Res([{"payload": self.iaq_blob, "updated_at": "t1"}])
+        return super().run(q)
+
+
+class MergedIaqUploadTests(unittest.TestCase):
+    setUp = IaqUploadPlanTests.setUp
+    tearDown = IaqUploadPlanTests.tearDown
+
+    def test_superseded_responses_do_not_trip_the_regression_guard(self):
+        stored = {"geojson": {"features": [_iaq_feat("R_old"), _iaq_feat("R_bt9KhSC0xqF2xuS")]}}
+
+        def process(csv_bytes, contacts, idx):
+            return ({"type": "FeatureCollection", "features": [_iaq_feat("R_bt9KhSC0xqF2xuS")],
+                     "superseded_features": [_iaq_feat("R_old")]}, {"scores": {}}, {}, 0, [])
+        U.process_iaq_bytes = process
+        plan = U.prepare_iaq_upload(_SBWithIaq(self.blob, stored), "oct.csv", b"x")
+        self.assertEqual(plan["status"], 200, plan["body"])
+        self.assertEqual(plan["versions"][0]["dropped_response_ids"], [])
+
+    def test_validation_counts_follow_the_field_link(self):
+        plan = U.prepare_iaq_upload(_SB(self.blob), "oct.csv", b"x")
+        self.assertEqual(plan["blobs"][0]["payload"]["validation"]["matched_iaq_responses"], 1)
+        self.assertEqual(plan["body"]["validation"]["matched_iaq_responses"], 1)
+
+    def test_finalize_rederives_match_status_and_keeps_other_counts(self):
+        gj = {"features": [_iaq_feat("R_1", matched=True), _iaq_feat("R_2")]}
+        analysis = {"validation": {"completed_in_csv": 126}}
+        _finalize_iaq_match_state(gj, analysis, [])
+        self.assertEqual([f["properties"]["match_status"] for f in gj["features"]],
+                         ["matched", "iaq_only"])
+        self.assertEqual(analysis["validation"]["matched_iaq_responses"], 1)
+        self.assertEqual(analysis["validation"]["completed_in_csv"], 126)
+
+    def test_response_body_carries_the_audit_trail(self):
+        body = _with_audit_trail({"status": "ok"}, {"version_statuses": ["full", "base_only"]})
+        self.assertEqual(body["audit_trail"]["status"], "degraded")
+        self.assertEqual(_with_audit_trail({}, {"version_statuses": ["full"]})["audit_trail"]["status"], "full")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -70,24 +70,25 @@ def _check_stamps_sequential(sb, expected: dict) -> None:
             raise StaleWriteError(f"keystone_stale_write: {data_type} changed since it was read")
 
 
-def _insert_version_sequential(sb, version: dict) -> bool:
+def _insert_version_sequential(sb, version: dict) -> str:
+    """'full' | 'base_only' (migration-26 columns missing) | 'failed'. Never raises."""
     base = {k: v for k, v in version.items() if k not in VERSION_AUDIT_KEYS}
     try:
         sb.table("keystone_analysis_versions").insert(version).execute()
-        return True
+        return "full"
     except Exception as e:
         if base == version:
             print(f"[writes] version insert failed ({type(e).__name__}: {e})")
-            return False
+            return "failed"
         print(f"[writes] enriched version insert failed ({type(e).__name__}: {e}) — "
               f"retrying with base columns only (migration 26 not applied?)")
     try:
         sb.table("keystone_analysis_versions").insert(base).execute()
-        return True
+        return "base_only"
     except Exception as e:
         print(f"[writes] base version insert ALSO failed ({type(e).__name__}: {e}); "
               f"the data blobs were saved, only the audit row is missing.")
-        return False
+        return "failed"
 
 
 def commit_dashboard_writes(sb, blobs: list, versions: list,
@@ -97,7 +98,8 @@ def commit_dashboard_writes(sb, blobs: list, versions: list,
     expected = {"<data_type>": "<updated_at as read>" | None}
 
     Returns {"mode": "rpc"|"sequential", "blobs_written": [...],
-             "versions_written": int}. Raises StaleWriteError on a
+             "versions_written": int, "version_statuses": ["full" |
+             "base_only" | "failed", ...] (one per version, in order)}. Raises StaleWriteError on a
     compare-and-set conflict; any other blob-write error propagates.
     """
     rpc = getattr(sb, "rpc", None)
@@ -112,7 +114,8 @@ def commit_dashboard_writes(sb, blobs: list, versions: list,
             ids = data.get("version_ids") if isinstance(data, dict) else None
             return {"mode": "rpc",
                     "blobs_written": [b["data_type"] for b in blobs],
-                    "versions_written": len(ids) if ids is not None else len(versions)}
+                    "versions_written": len(ids) if ids is not None else len(versions),
+                    "version_statuses": ["full"] * len(versions)}
         except Exception as e:
             if "keystone_stale_write" in _err_text(e):
                 raise StaleWriteError(str(e)) from e
@@ -129,5 +132,7 @@ def commit_dashboard_writes(sb, blobs: list, versions: list,
             on_conflict="data_type",
         ).execute()
         written.append(b["data_type"])
-    n_versions = sum(1 for v in versions if _insert_version_sequential(sb, v))
-    return {"mode": "sequential", "blobs_written": written, "versions_written": n_versions}
+    statuses = [_insert_version_sequential(sb, v) for v in versions]
+    return {"mode": "sequential", "blobs_written": written,
+            "versions_written": sum(1 for s in statuses if s != "failed"),
+            "version_statuses": statuses}
