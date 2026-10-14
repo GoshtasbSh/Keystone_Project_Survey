@@ -54,6 +54,12 @@ let activeGuestNames = new Set();  // lowercased names of unexpired guests, from
 let activeFilters = new Set();
 let charts = {};
 let iaqData = null, iaqAnalysis = null, chatHistory = [];
+// Latest-response-per-household (see splitExcludedDuplicates). Kept as
+// globals, not feature properties: MapLibre stringifies array properties
+// on click events.
+let iaqExcludedFeatures = [];
+let _iaqDupRedirect = new Map();       // excluded response_id → kept response_id
+let _iaqDupEarlierByKept = new Map();  // kept response_id → [{response_id, recorded_date}]
 let currentContactFilter = null;
 let currentIAQFilter = null;
 let panelSizes = { sidebar: 280, analysis: 300, chat: 340 };
@@ -276,6 +282,43 @@ function countMatchGroups(contactFeatures, iaqFeatures) {
   return counts;
 }
 
+// Latest-response-per-household: the server flags the earlier answer(s)
+// with dup_excluded=true + dup_kept_response_id. They are kept in the data
+// but never drawn or counted. `redirect` maps an excluded response id to
+// the kept one so an old link (contact / field pin) still opens the
+// household's current answers; `earlierByKept` feeds the popup note.
+function splitExcludedDuplicates(features) {
+  const drawn = [], excluded = [];
+  const redirect = new Map(), earlierByKept = new Map();
+  const note = (kept, entry) => {
+    if (!kept || !entry.response_id) return;
+    if (!earlierByKept.has(kept)) earlierByKept.set(kept, []);
+    const list = earlierByKept.get(kept);
+    if (!list.some(e => e.response_id === entry.response_id)) list.push(entry);
+  };
+  for (const f of (features || [])) {
+    const p = (f && f.properties) || {};
+    if (p.dup_excluded === true || p.dup_excluded === 'true') {
+      excluded.push(f);
+      const rid = String(p.response_id || '').trim();
+      const kept = String(p.dup_kept_response_id || '').trim();
+      if (rid && kept) redirect.set(rid, kept);
+      note(kept, { response_id: rid, recorded_date: String(p.recorded_date || '') });
+    } else {
+      drawn.push(f);
+      const rid = String(p.response_id || '').trim();
+      if (Array.isArray(p.dup_earlier_response_ids)) {
+        for (const e of p.dup_earlier_response_ids) {
+          const erid = String(e || '').trim();
+          if (erid && rid) redirect.set(erid, rid);
+          note(rid, { response_id: erid, recorded_date: '' });
+        }
+      }
+    }
+  }
+  return { drawn, excluded, redirect, earlierByKept };
+}
+
 // ==== PURE-HELPERS END ====
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -313,6 +356,19 @@ function showToast(msg, durationMs = 5000) {
 function iaqUnmatched(data) {
   if (!data || !data.features) return data;
   return { ...data, features: data.features.filter(f => !f.properties.iaq_matched) };
+}
+
+// Apply the latest-response-per-household rule to a freshly fetched IAQ
+// collection. Returns a NEW object when something was excluded (the address
+// search caches by identity), the same object otherwise.
+function applyIaqDuplicateRule(fc) {
+  const feats = fc?.features;
+  if (!Array.isArray(feats)) return fc;
+  const s = splitExcludedDuplicates(feats);
+  iaqExcludedFeatures = s.excluded;
+  _iaqDupRedirect = s.redirect;
+  _iaqDupEarlierByKept = s.earlierByKept;
+  return s.excluded.length ? { ...fc, features: s.drawn } : fc;
 }
 
 // Must match FALLBACK_ADDRESS in api/iaq-points.py — the parcel address
@@ -481,7 +537,7 @@ async function loadData() {
     pruneStaleFieldCopies();
     parcelsData  = await _safeJson(parRes,    EMPTY_GJ);
     analysisData = await _safeJson(anaRes,    {});
-    iaqData      = await _safeJson(iaqPtsRes, EMPTY_GJ);
+    iaqData      = applyIaqDuplicateRule(await _safeJson(iaqPtsRes, EMPTY_GJ));
     // Attach parcel_address + orphan flag before backfilling match_status —
     // the backfill below needs p.orphan to decide G1 vs G3.
     await _mergeOrphanAddresses(iaqData);
@@ -572,7 +628,7 @@ async function refreshAllData() {
     pruneStaleFieldCopies();
     parcelsData   = await safe(parRes, EMPTY_GJ);
     analysisData  = await safe(anaRes, {});
-    iaqData       = await safe(iaqPtsRes, EMPTY_GJ);
+    iaqData       = applyIaqDuplicateRule(await safe(iaqPtsRes, EMPTY_GJ));
     await _mergeOrphanAddresses(iaqData);
     _backfillContactMatchStatus(surveyData);
     _backfillIaqMatchStatus(iaqData);
@@ -1735,6 +1791,13 @@ function resolveMatchedIaqFeature(contactProps, contactCoords) {
   if (targetRespId) {
     const byId = feats.find((f) => String(f?.properties?.response_id || '').trim() === targetRespId);
     if (byId) return byId;
+    // Linked to an earlier answer that the latest-per-household rule
+    // excluded: open the household's kept (latest) answers instead.
+    const keptId = _iaqDupRedirect.get(targetRespId);
+    if (keptId) {
+      const byKept = feats.find((f) => String(f?.properties?.response_id || '').trim() === keptId);
+      if (byKept) return byKept;
+    }
   }
 
   if (sp.iaq_match_lon != null && sp.iaq_match_lat != null) {
@@ -1785,6 +1848,7 @@ const _IAQ_NON_ANSWER_FIELDS = new Set([
   'matched_address', 'coord_source', 'second_attempt',
   'status_detail', 'parcel_id', 'parcel_lon', 'parcel_lat',
   'source', 'field_point_id', 'coincident_contacts',
+  'dup_excluded', 'dup_kept_response_id', 'dup_earlier_response_ids', 'household_key',
 ]);
 
 // Survey-question category structure — mirrors the analysis charts'
@@ -1870,6 +1934,10 @@ function buildSurveyAnswersTab(iaqProps) {
   const friendly = (k) => k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   const props = iaqProps || {};
   const sc = sharedCodeLabelState(iaqAnalysis?.analysis);
+  const earlier = _iaqDupEarlierByKept.get(String(props.response_id || '').trim()) || [];
+  const dupNote = earlier.length
+    ? `<div style="margin:2px 0 8px;padding:6px 8px;border-radius:6px;background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.3);font-size:10.5px;color:var(--text2);line-height:1.4">This household answered ${earlier.length + 1} times. Only this latest response is used in the analysis; the earlier response${earlier.length === 1 ? ' was' : 's were'} excluded: ${earlier.map(e => escapeHtml(e.response_id) + (e.recorded_date ? ` (${escapeHtml(e.recorded_date.slice(0, 10))})` : '')).join(', ')}.</div>`
+    : '';
 
   // The label is shown in full and never truncated: it is the survey's own
   // question wording, so a reader must be able to select it and find that
@@ -1923,6 +1991,7 @@ function buildSurveyAnswersTab(iaqProps) {
     : '';
 
   return `<div class="popup-body" style="max-height:380px;overflow-y:auto;padding-right:4px">
+    ${dupNote}
     <div class="popup-row">
       <span class="popup-label">Risk score</span>
       <span class="popup-value" style="font-family:var(--mono)"><strong>${Number(props.overall_risk) || 0}</strong>/100 · ${escapeHtml(props.risk_tier || '—')}</span>
@@ -3423,7 +3492,7 @@ async function restoreVersion(id, label, type) {
       fitBounds();
     } else {
       const iaqPts = await (await fetchIaqPoints()).json();
-      iaqData = iaqPts;
+      iaqData = applyIaqDuplicateRule(iaqPts);
       await _mergeOrphanAddresses(iaqData);
       _backfillIaqMatchStatus(iaqData);
       const iaqAna = await (await _authFetch('/api/analysis?type=iaq')).json();
